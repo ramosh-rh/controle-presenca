@@ -6,10 +6,15 @@
 <title>Presença — Controle de Equipe</title>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 const firebaseConfig={apiKey:"AIzaSyCdscx86MntuXmTzX87Tdwb3XbFbvTdj7w",authDomain:"controle-presenca-d55c4.firebaseapp.com",projectId:"controle-presenca-d55c4",storageBucket:"controle-presenca-d55c4.firebasestorage.app",messagingSenderId:"743343120094",appId:"1:743343120094:web:ea30489b70659d8546ac4f"};
-let db=null; try{firebase.initializeApp(firebaseConfig);db=firebase.firestore();}catch(e){console.warn("Firebase não inicializado",e);}
+let db=null, auth=null;
+try{firebase.initializeApp(firebaseConfig);db=firebase.firestore();auth=firebase.auth();}catch(e){console.warn('Firebase não inicializado',e);}
+function mergeLocalColaboradores(){try{const saved=JSON.parse(localStorage.getItem('presenca_colaboradores')||'[]');if(saved.length){const ids=new Set(state.colaboradores.map(c=>c.id));saved.forEach(c=>{if(!ids.has(c.id))state.colaboradores.push(c);else Object.assign(state.colaboradores.find(x=>x.id===c.id),c);});state.nextColabId=Math.max(state.nextColabId,...state.colaboradores.map(c=>+c.id+1));}}catch(e){console.warn('Não foi possível ler os dados locais',e);}}
+function persistColaborador(c){try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){console.warn('Armazenamento local indisponível',e);}if(db){db.collection('colaboradores').doc(String(c.id)).set({...c,atualizadoEm:new Date().toISOString()},{merge:true}).catch(e=>console.warn('Firebase bloqueou a gravação. Verifique as regras do Firestore:',e.message));}}
+function persistTodosColaboradores(){state.colaboradores.forEach(persistColaborador);}
 </script>
 <style>
 :root{
@@ -37,6 +42,7 @@ h1{font-size:clamp(1.55rem,2.5vw,2.05rem);letter-spacing:-.04em;margin:0 0 5px;c
 @media(max-width:900px){.sidebar{width:205px}.main{padding:22px 20px 36px}.insight-grid{grid-template-columns:1fr}}
 @media(max-width:650px){.app{display:block}.sidebar{width:100%;padding:12px 10px;display:flex;align-items:center;gap:5px;overflow-x:auto;position:sticky;top:0}.brand{font-size:1rem;padding:5px 8px;margin:0 6px 0 0;white-space:nowrap}.brand:before{width:28px;height:28px;border-radius:9px}.nav-item{font-size:.75rem;padding:9px 10px;white-space:nowrap;margin:0}.nav-item:before{display:none}.main{padding:18px 13px 32px}.top-actions{justify-content:flex-end}.userbar{font-size:.75rem}.page-hero{display:block;padding:18px}.page-hero button{margin-top:14px}.cards{grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:14px}.stat .n{font-size:1.6rem}th,td{padding:11px 9px;white-space:nowrap}.table-scroll{margin-right:-3px}.toolbar{align-items:stretch}.toolbar .fgroup{flex:1;min-width:130px}.toolbar button{width:100%}.modal{padding:22px 18px}}
 </style>
+<link rel="icon" href="data:,">
 </head>
 <body>
 <div id="root"></div>
@@ -75,6 +81,8 @@ let state = {
   nextUserId: 2,
   nextHistId: 1,
 };
+mergeLocalColaboradores();
+if(db){db.collection('colaboradores').get().then(snap=>{snap.forEach(doc=>{const item=doc.data();const id=+doc.id;const atual=state.colaboradores.find(c=>c.id===id);if(atual)Object.assign(atual,item);else state.colaboradores.push({...item,id});});state.nextColabId=Math.max(state.nextColabId,...state.colaboradores.map(c=>+c.id+1));try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){} if(state.loggedUser)render();}).catch(e=>console.warn('Não foi possível carregar colaboradores do Firebase. Verifique as regras do Firestore:',e.message));}
 
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function fmtDate(d){ if(!d) return '—'; const [y,m,day]=d.split('-'); return `${day}/${m}/${y}`; }
@@ -393,7 +401,7 @@ function bindTabEvents(){
     document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
       const c = state.colaboradores.find(x=>x.id===+b.dataset.del);
       if(!confirm(`Excluir definitivamente ${c.nome}? Isso também remove seu histórico e marcações.`)) return;
-      state.colaboradores = state.colaboradores.filter(x=>x.id!==c.id);
+      state.colaboradores = state.colaboradores.filter(x=>x.id!==c.id); localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores)); if(db) db.collection('colaboradores').doc(String(c.id)).delete().catch(e=>console.warn('Não foi possível excluir no Firebase:',e.message));
       state.historico = state.historico.filter(h=>h.colaboradorId!==c.id);
       Object.keys(state.registros).forEach(k=>{ if(k.startsWith(c.id+'|')) delete state.registros[k]; });
       logAudit(`${state.loggedUser.nome} excluiu o colaborador ${c.nome}.`);
@@ -574,7 +582,7 @@ function bindModalEvents(wrap){
         depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value,
         admissao:wrap.querySelector('#f_admissao').value,
       });
-      logAudit(`${state.loggedUser.nome} editou o cadastro de ${nome}.`);
+      persistColaborador(c); logAudit(`${state.loggedUser.nome} editou o cadastro de ${nome}.`);
     } else {
       const novo = {
         id: state.nextColabId++, nome,
@@ -584,7 +592,7 @@ function bindModalEvents(wrap){
         admissao:wrap.querySelector('#f_admissao').value,
         status:'Ativo'
       };
-      state.colaboradores.push(novo);
+      state.colaboradores.push(novo); persistColaborador(novo);
       logAudit(`${state.loggedUser.nome} cadastrou o colaborador ${nome}.`);
     }
     modal=null; render();
@@ -705,6 +713,7 @@ function handleImportFile(e){
           admissao: excelDateToISO(get('admissao')),
           status: (get('status')||'Ativo').toString() || 'Ativo'
         });
+        persistColaborador(state.colaboradores[state.colaboradores.length-1]);
         importados++;
       }
 
