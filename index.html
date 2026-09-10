@@ -121,7 +121,7 @@ const COLUMN_MAP = {
   'matricula':'matricula', 'matricula ':'matricula', 'registro':'matricula',
   'cpf':'cpf',
   'cargo':'cargo', 'funcao':'cargo',
-  'depto':'depto', 'departamento':'depto', 'setor':'depto',
+  'depto':'depto', 'departamento':'depto', 'setor':'setor', 'secao':'setor',
   'admissao':'admissao', 'data de admissao':'admissao', 'dt admissao':'admissao',
   'status':'status',
   'filial':'filial',
@@ -264,7 +264,7 @@ function statusBadge(status){
 // ---- Colaboradores ----
 function renderColaboradores(){
   const term=normKey(searchTerm); const list=state.colaboradores.filter(c=>(normKey(c.nome).includes(term)||normKey(c.matricula||'').includes(term))&&(colabSetor==='todos'||c.setor===colabSetor)&&(colabStatus==='todos'||c.status===colabStatus)).sort(byName);
-  return `<h1>Colaboradores</h1><div class="sub">${state.colaboradores.length} cadastrado(s) — cadastro, edição, exclusão e histórico</div><div class="toolbar"><div class="fgroup"><label>Buscar por nome ou matrícula</label><input id="searchColab" placeholder="Digite para buscar..." value="${esc(searchTerm)}"></div><div class="fgroup"><label>Setor</label><select id="colabSetor"><option value="todos">Todos</option>${setores().map(x=>`<option value="${esc(x)}" ${colabSetor===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="fgroup"><label>Status</label><select id="colabStatus"><option value="todos">Todos</option>${['Ativo','Férias','Afastado','Suspenso','Demitido'].map(x=>`<option ${colabStatus===x?'selected':''}>${x}</option>`).join('')}</select></div><button id="novoColab">+ Novo colaborador</button></div><div class="table-scroll"><table><tr><th>Nome</th><th>Matrícula</th><th>Cargo</th><th>Depto</th><th>Setor</th><th>Admissão</th><th>Status</th><th>Ações</th></tr>${list.map(c=>`<tr><td>${c.nome}</td><td>${c.matricula}</td><td>${c.cargo||'—'}</td><td>${c.depto||'—'}</td><td>${c.setor?`<span class="badge" style="background:${c.setor==='Compra'?'#c0392b':'#1e4d8b'}">${c.setor}</span>`:'—'}</td><td>${fmtDate(c.admissao)}</td><td>${statusBadge(c.status)}</td><td><div class="btnrow"><button class="secondary" data-edit="${c.id}">Editar</button><button class="secondary" data-hist="${c.id}">Histórico</button>${c.status!=='Demitido'?`<button class="secondary" data-fire="${c.id}">Desligar</button>`:''}<button class="danger" data-del="${c.id}">Excluir</button></div></td></tr>`).join('')||'<tr><td colspan="8" class="empty-state">Nenhum colaborador encontrado.</td></tr>'}</table></div>`;
+  return `<h1>Colaboradores</h1><div class="sub">${state.colaboradores.length} cadastrado(s) — cadastro, edição, exclusão e histórico</div><div class="toolbar"><div class="fgroup"><label>Buscar por nome ou matrícula</label><input id="searchColab" placeholder="Digite para buscar..." value="${esc(searchTerm)}"></div><div class="fgroup"><label>Setor</label><select id="colabSetor"><option value="todos">Todos</option>${setores().map(x=>`<option value="${esc(x)}" ${colabSetor===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="fgroup"><label>Status</label><select id="colabStatus"><option value="todos">Todos</option>${['Ativo','Férias','Afastado','Suspenso','Demitido'].map(x=>`<option ${colabStatus===x?'selected':''}>${x}</option>`).join('')}</select></div><button id="novoColab">+ Novo colaborador</button></div><div class="table-scroll"><table><tr><th>Nome</th><th>Filial</th><th>Matrícula</th><th>Cargo</th><th>Depto</th><th>Setor</th><th>Admissão</th><th>Status</th><th>Ações</th></tr>${list.map(c=>`<tr><td>${c.nome}</td><td>${c.filial||'—'}</td><td>${c.matricula}</td><td>${c.cargo||'—'}</td><td>${c.depto||'—'}</td><td>${c.setor?`<span class="badge" style="background:${c.setor==='Compra'?'#c0392b':'#1e4d8b'}">${c.setor}</span>`:'—'}</td><td>${fmtDate(c.admissao)}</td><td>${statusBadge(c.status)}</td><td><div class="btnrow"><button class="secondary" data-edit="${c.id}">Editar</button><button class="secondary" data-hist="${c.id}">Histórico</button>${c.status!=='Demitido'?`<button class="secondary" data-fire="${c.id}">Desligar</button>`:''}<button class="danger" data-del="${c.id}">Excluir</button></div></td></tr>`).join('')||'<tr><td colspan="9" class="empty-state">Nenhum colaborador encontrado.</td></tr>'}</table></div>`;
 }
 
 // ---- Presença ----
@@ -333,7 +333,7 @@ function renderImportExport(){
     <h1>Importar / Exportar</h1>
     <div class="sub">Planilhas Excel (.xlsx / .xls)</div>
     <h2 style="font-size:1.05rem;">Importar colaboradores</h2>
-    <p class="hint">Aceita planilhas com cabeçalhos como: Nome, Matrícula, CPF, Cargo/Função, Departamento, Admissão, Status, Filial — mesmo com linhas de título antes da tabela (o sistema localiza a linha de cabeçalho automaticamente).</p>
+    <p class="hint">Aceita planilhas com cabeçalhos como: Nome, Filial, Setor, Departamento, Função, Matrícula, Admissão, Status, CPF — mesmo com linhas de título antes da tabela (o sistema localiza a linha de cabeçalho automaticamente).</p>
     <input type="file" id="fileImport" accept=".xlsx,.xls">
     <div id="importPreview"></div>
     <hr style="margin:26px 0;border:none;border-top:1px solid var(--line);">
@@ -500,13 +500,8 @@ function colabModal(){
     <div class="field"><label>CPF</label><input id="f_cpf" value="${c.cpf||''}"></div>
     <div class="field"><label>Cargo</label><input id="f_cargo" value="${c.cargo||''}"></div>
     <div class="field"><label>Departamento</label><input id="f_depto" value="${c.depto||''}"></div>
-    <div class="field"><label>Setor</label>
-      <select id="f_setor">
-        <option value="" ${!c.setor?'selected':''}>Selecione...</option>
-        <option value="Compra" ${c.setor==='Compra'?'selected':''}>Compra</option>
-        <option value="Guarda" ${c.setor==='Guarda'?'selected':''}>Guarda</option>
-      </select>
-    </div>
+    <div class="field"><label>Setor</label><input id="f_setor" list="setoresEditaveis" value="${c.setor||''}" placeholder="Ex.: COMPRA ou GUARDA"><datalist id="setoresEditaveis"><option value="COMPRA"><option value="GUARDA"><option value="Compra"><option value="Guarda"></datalist></div>
+    <div class="field"><label>Filial</label><input id="f_filial" value="${c.filial||''}" placeholder="Ex.: MAGE"></div>
     <div class="field"><label>Data de admissão</label><input type="date" id="f_admissao" value="${c.admissao||''}"></div>
     <div class="modal-actions">
       <button class="secondary" id="cancelModal">Cancelar</button>
@@ -579,7 +574,7 @@ function bindModalEvents(wrap){
       Object.assign(c, {
         nome, matricula:wrap.querySelector('#f_matricula').value,
         cpf:wrap.querySelector('#f_cpf').value, cargo:wrap.querySelector('#f_cargo').value,
-        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value,
+        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value, filial:wrap.querySelector('#f_filial').value,
         admissao:wrap.querySelector('#f_admissao').value,
       });
       persistColaborador(c); logAudit(`${state.loggedUser.nome} editou o cadastro de ${nome}.`);
@@ -588,7 +583,7 @@ function bindModalEvents(wrap){
         id: state.nextColabId++, nome,
         matricula:wrap.querySelector('#f_matricula').value || String(state.nextColabId).padStart(4,'0'),
         cpf:wrap.querySelector('#f_cpf').value, cargo:wrap.querySelector('#f_cargo').value,
-        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value,
+        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value, filial:wrap.querySelector('#f_filial').value,
         admissao:wrap.querySelector('#f_admissao').value,
         status:'Ativo'
       };
@@ -708,6 +703,8 @@ async function handleImportFile(e){
           id: state.nextColabId++,
           nome,
           matricula: matriculaRaw || String(state.nextColabId).padStart(4,'0'),
+          filial:(get('filial')||'').toString().trim(),
+          setor:(get('setor')||'').toString().trim(),
           cpf,
           cargo:(get('cargo')||'').toString(),
           depto:(get('depto')||'').toString(),
@@ -754,7 +751,7 @@ function downloadWorkbook(wb, filename){
 
 function exportColaboradores(){
   const data = state.colaboradores.map(c=>({
-    Nome:c.nome, Matricula:c.matricula, CPF:c.cpf, Cargo:c.cargo, Departamento:c.depto, Admissao:c.admissao, Status:c.status
+    Nome:c.nome, Filial:c.filial||'', Setor:c.setor||'', Matricula:c.matricula, CPF:c.cpf, Cargo:c.cargo, Departamento:c.depto, Admissao:c.admissao, Status:c.status
   }));
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
