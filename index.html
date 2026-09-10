@@ -13,7 +13,7 @@ const firebaseConfig={apiKey:"AIzaSyCdscx86MntuXmTzX87Tdwb3XbFbvTdj7w",authDomai
 let db=null, auth=null;
 try{firebase.initializeApp(firebaseConfig);db=firebase.firestore();auth=firebase.auth();}catch(e){console.warn('Firebase não inicializado',e);}
 function mergeLocalColaboradores(){try{const saved=JSON.parse(localStorage.getItem('presenca_colaboradores')||'[]');if(saved.length){const ids=new Set(state.colaboradores.map(c=>c.id));saved.forEach(c=>{if(!ids.has(c.id))state.colaboradores.push(c);else Object.assign(state.colaboradores.find(x=>x.id===c.id),c);});state.nextColabId=Math.max(state.nextColabId,...state.colaboradores.map(c=>+c.id+1));}}catch(e){console.warn('Não foi possível ler os dados locais',e);}}
-function persistColaborador(c){try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){console.warn('Armazenamento local indisponível',e);}if(db){db.collection('colaboradores').doc(String(c.id)).set({...c,atualizadoEm:new Date().toISOString()},{merge:true}).catch(e=>console.warn('Firebase bloqueou a gravação. Verifique as regras do Firestore:',e.message));}}
+function persistColaborador(c){try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){console.warn('Armazenamento local indisponível',e);}if(!db){return Promise.reject(new Error('Firebase não inicializado'));}return db.collection('colaboradores').doc(String(c.id)).set({...c,atualizadoEm:new Date().toISOString()},{merge:true}).then(()=>true).catch(e=>{console.warn('Firebase bloqueou a gravação. Verifique as regras do Firestore:',e.message);throw e;});}
 function persistTodosColaboradores(){state.colaboradores.forEach(persistColaborador);}
 </script>
 <style>
@@ -649,13 +649,13 @@ function bindModalEvents(wrap){
 }
 
 // ================== IMPORTAR / EXPORTAR EXCEL ==================
-function handleImportFile(e){
+async function handleImportFile(e){
   const file = e.target.files[0];
   if(!file) return;
   const preview = document.getElementById('importPreview');
   preview.innerHTML = '<p class="hint">Lendo planilha...</p>';
   const reader = new FileReader();
-  reader.onload = (evt)=>{
+  reader.onload = async (evt)=>{
     try{
       const wb = XLSX.read(evt.target.result, {type:'binary', cellDates:false});
       const sheet = wb.Sheets[wb.SheetNames[0]];
@@ -685,6 +685,7 @@ function handleImportFile(e){
       }
 
       const problemas = [];
+      const gravacoesFirebase = [];
       let importados = 0;
       for(let i=headerRowIdx+1; i<matrix.length; i++){
         const row = matrix[i];
@@ -713,13 +714,16 @@ function handleImportFile(e){
           admissao: excelDateToISO(get('admissao')),
           status: (get('status')||'Ativo').toString() || 'Ativo'
         });
-        persistColaborador(state.colaboradores[state.colaboradores.length-1]);
+        gravacoesFirebase.push(persistColaborador(state.colaboradores[state.colaboradores.length-1]));
         importados++;
       }
 
+      const resultadosFirebase = await Promise.allSettled(gravacoesFirebase);
+      const salvosFirebase = resultadosFirebase.filter(x=>x.status==='fulfilled').length;
+      const falhasFirebase = resultadosFirebase.length - salvosFirebase;
       logAudit(`${state.loggedUser.nome} importou planilha: ${importados} colaborador(es) adicionados, ${problemas.length} problema(s).`);
       preview.innerHTML = `
-        <div class="ok-box"><b>${importados} colaborador(es) importado(s) com sucesso.</b></div>
+        <div class="ok-box"><b>${importados} colaborador(es) importado(s) com sucesso.</b><br>${salvosFirebase} salvo(s) no Firebase e no navegador.${falhasFirebase?`<br><strong>${falhasFirebase} não foi(ram) salvo(s) no Firebase.</strong> Verifique o console do navegador.`:''}</div>
         ${problemas.length? `<div class="problem-box"><b>${problemas.length} linha(s) ignorada(s):</b><br>${problemas.slice(0,50).join('<br>')}${problemas.length>50?'<br>...':''}</div>`:''}
       `;
       if(importados>0) render();
