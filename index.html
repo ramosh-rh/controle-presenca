@@ -61,6 +61,8 @@ const TIPOS = {
   'Declaração': {cor:'#a67b1e', conta:'afastamento'},
   'Licença-maternidade': {cor:'#b0396f', conta:'afastamento'},
   'Suspensão': {cor:'#555555', conta:'afastamento'},
+  'Afastamento': {cor:'#9b59b6', conta:'afastamento'},
+  'Folga': {cor:'#16a085', conta:'afastamento'},
 };
 
 let state = {
@@ -233,7 +235,7 @@ function renderDashboard(){
   const maiorAbs=abs[0];
   const taxa = ativos.length ? Math.round((presentes / ativos.length) * 100) : 0;
   return `
-    <div class="page-hero"><div><h1>Bom trabalho, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>Painel atualizado para ${fmtDate(today)}. Acompanhe a rotina da equipe em um só lugar.</div></div><button id="heroPresence">Abrir controle diário</button></div>
+    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Painel atualizado para ${fmtDate(today)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
     <div class="cards">
       ${stat(ativos.length,'Funcionários ativos')}
       ${stat(presentes,'Presentes hoje')}
@@ -256,6 +258,27 @@ function renderDashboard(){
 }
 function stat(n,l){ return `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
 function tipoBadge(tipo){ const cor = TIPOS[tipo]?.cor || '#777'; return `<span class="badge" style="background:${cor}">${tipo}</span>`; }
+function saudacaoAtual(){const h=new Date().getHours();return h<12?'Bom dia':h<18?'Boa tarde':'Boa noite';}
+const MENSAGENS_DIA=[
+  'Comece o dia com foco e faça acontecer.',
+  'Grandes resultados são construídos com pequenas atitudes todos os dias.',
+  'Uma equipe alinhada transforma esforço em resultado.',
+  'Disciplina e constância fazem a diferença no desenvolvimento pessoal.',
+  'Liderar também é ouvir, apoiar e incentivar quem está ao nosso lado.',
+  'Cada tarefa bem realizada aproxima a equipe dos seus objetivos.',
+  'Foco no que importa, atitude no que precisa ser feito.',
+  'O esforço de hoje é o resultado que construiremos amanhã.'
+];
+function mensagemDoDia(){const dia=Math.floor(Date.now()/86400000);return MENSAGENS_DIA[dia%MENSAGENS_DIA.length];}
+function dadosRelatorioFiltrado(){
+  const historico=state.historico.filter(h=>{const c=state.colaboradores.find(x=>x.id===h.colaboradorId);return (relColabId==='todos'||h.colaboradorId===+relColabId)&&(relSetor==='todos'||c?.setor===relSetor)&&(relTipo==='todos'||h.tipo===relTipo)&&h.inicio<=relFim&&h.fim>=relInicio;});
+  const diarios=[];Object.keys(state.registros).forEach(key=>{const [cid,data]=key.split('|');const c=state.colaboradores.find(x=>x.id===+cid);if(data>=relInicio&&data<=relFim&&(relColabId==='todos'||+cid===+relColabId)&&(relSetor==='todos'||c?.setor===relSetor)&&(relTipo==='todos'||state.registros[key].tipo===relTipo))diarios.push({colaboradorId:+cid,data,...state.registros[key]});});
+  diarios.sort((a,b)=>a.data.localeCompare(b.data)||byName(state.colaboradores.find(x=>x.id===a.colaboradorId)||{},state.colaboradores.find(x=>x.id===b.colaboradorId)||{}));
+  return {historico,diarios};
+}
+function exportRelatorioExcel(){const d=dadosRelatorioFiltrado();const rows=[...d.historico.map(h=>{const c=state.colaboradores.find(x=>x.id===h.colaboradorId);return {Categoria:'Período',Colaborador:c?.nome||'',Setor:c?.setor||'',Tipo:h.tipo,Inicio:h.inicio,Fim:h.fim,Dias:h.dias,Horario:'',Observacao:h.obs||''};}),...d.diarios.map(x=>{const c=state.colaboradores.find(y=>y.id===x.colaboradorId);return {Categoria:'Diária',Colaborador:c?.nome||'',Setor:c?.setor||'',Tipo:x.tipo,Inicio:x.data,Fim:x.data,Dias:1,Horario:x.hora||'',Observacao:x.obs||''};})];const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Relatório filtrado');downloadWorkbook(wb,'relatorio_presenca_filtrado.xlsx');logAudit(`${state.loggedUser.nome} exportou relatório filtrado em Excel.`);}
+function imprimirRelatorio(){const d=dadosRelatorioFiltrado();const linhas=[...d.historico.map(h=>{const c=state.colaboradores.find(x=>x.id===h.colaboradorId);return `<tr><td>Período</td><td>${c?.nome||''}</td><td>${c?.setor||''}</td><td>${h.tipo}</td><td>${fmtDate(h.inicio)}</td><td>${fmtDate(h.fim)}</td><td>${h.dias}</td><td>${h.obs||''}</td></tr>`;}),...d.diarios.map(x=>{const c=state.colaboradores.find(y=>y.id===x.colaboradorId);return `<tr><td>Diária</td><td>${c?.nome||''}</td><td>${c?.setor||''}</td><td>${x.tipo}</td><td>${fmtDate(x.data)}</td><td>${fmtDate(x.data)}</td><td>1</td><td>${x.hora?`Hora: ${x.hora} `:''}${x.obs||''}</td></tr>`;})].join('');const w=window.open('','_blank','width=1100,height=750');if(!w){alert('Permita pop-ups para imprimir o relatório.');return;}w.document.write(`<html><head><title>Relatório de presença</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#172235}h1{font-size:22px}p{color:#64748b}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #cbd5e1;padding:7px;text-align:left}th{background:#eaf1f9}@media print{button{display:none}}</style></head><body><h1>Relatório de presença</h1><p>Período: ${fmtDate(relInicio)} até ${fmtDate(relFim)} | Filtros mantidos na exportação</p><table><tr><th>Categoria</th><th>Colaborador</th><th>Setor</th><th>Tipo</th><th>Início</th><th>Fim</th><th>Dias</th><th>Observação</th></tr>${linhas||'<tr><td colspan="8">Nenhum registro encontrado.</td></tr>'}</table><script>window.onload=()=>{window.print();}<\/script></body></html>`);w.document.close();logAudit(`${state.loggedUser.nome} abriu impressão/PDF do relatório filtrado.`);}
+
 function statusBadge(status){
   const cores = {'Ativo':'#1e4d8b','Férias':'#2e7bbf','Afastado':'#7a3b8a','Suspenso':'#555','Demitido':'#c0392b'};
   return `<span class="badge" style="background:${cores[status]||'#777'}">${status}</span>`;
@@ -302,7 +325,7 @@ function renderRelatorios(){
         </select>
       </div>
       <div class="fgroup"><label>De</label><input type="date" id="rel_inicio" value="${relInicio}"></div>
-      <div class="fgroup"><label>Até</label><input type="date" id="rel_fim" value="${relFim}"></div><div class="fgroup"><label>Setor</label><select id="rel_setor"><option value="todos">Todos</option>${setores().map(x=>`<option value="${esc(x)}" ${relSetor===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="fgroup"><label>Tipo</label><select id="rel_tipo"><option value="todos">Todos</option>${Object.keys(TIPOS).map(x=>`<option ${relTipo===x?'selected':''}>${x}</option>`).join('')}</select></div><button id="rel_buscar">Buscar</button>
+      <div class="fgroup"><label>Até</label><input type="date" id="rel_fim" value="${relFim}"></div><div class="fgroup"><label>Setor</label><select id="rel_setor"><option value="todos">Todos</option>${setores().map(x=>`<option value="${esc(x)}" ${relSetor===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="fgroup"><label>Tipo</label><select id="rel_tipo"><option value="todos">Todos</option>${Object.keys(TIPOS).map(x=>`<option ${relTipo===x?'selected':''}>${x}</option>`).join('')}</select></div><button id="rel_buscar">Buscar</button><button class="secondary" id="rel_excel">Exportar Excel</button><button class="secondary" id="rel_pdf">Exportar PDF / Imprimir</button>
     </div>
 
     <h2 style="font-size:1.05rem;">Períodos lançados (férias, atestado, suspensão etc.)</h2>
@@ -415,7 +438,7 @@ function bindTabEvents(){
       sel.onchange = ()=>{
         if(!sel.value) return;
         const cid = +sel.dataset.quick;
-        if(sel.value==='Saída antecipada'){modal={type:'saida',cid};render();return;} state.registros[cid+'|'+filterDate]={tipo:sel.value,obs:'',hora:''};
+        if(sel.value==='Saída antecipada'){modal={type:'saida',cid};render();return;} if(TIPOS[sel.value]?.conta==='afastamento'){modal={type:'periodo',cid,tipo:sel.value};render();return;} state.registros[cid+'|'+filterDate]={tipo:sel.value,obs:'',hora:''};
         const c = state.colaboradores.find(x=>x.id===cid);
         logAudit(`${state.loggedUser.nome} marcou ${c.nome} como "${sel.value}" em ${fmtDate(filterDate)}.`);
         // Atualiza só a linha afetada, sem recriar todos os <select> da tabela
@@ -434,6 +457,8 @@ function bindTabEvents(){
       relFim = document.getElementById('rel_fim').value; relSetor=document.getElementById('rel_setor').value; relTipo=document.getElementById('rel_tipo').value;
       render();
     };
+    document.getElementById('rel_excel').onclick=exportRelatorioExcel;
+    document.getElementById('rel_pdf').onclick=imprimirRelatorio;
     document.querySelectorAll('[data-delhist]').forEach(b=>b.onclick=()=>{
       const id = +b.dataset.delhist;
       const h = state.historico.find(x=>x.id===id);
@@ -525,12 +550,12 @@ function histModal(){
 function periodoModal(){
   const ativos = state.colaboradores.filter(c=>c.status!=='Demitido');
   return `
-    <h2>Lançar período</h2>
+    <h2>${modal.tipo?`Lançar ${modal.tipo}`:'Lançar período'}</h2>
     <div class="field"><label>Colaborador</label>
-      <select id="p_colab">${ativos.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('')}</select>
+      <select id="p_colab">${ativos.map(c=>`<option value="${c.id}" ${modal.cid===c.id?'selected':''}>${c.nome}</option>`).join('')}</select>
     </div>
     <div class="field"><label>Tipo de ocorrência</label>
-      <select id="p_tipo">${Object.keys(TIPOS).filter(t=>TIPOS[t].conta==='afastamento').map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
+      <select id="p_tipo">${Object.keys(TIPOS).filter(t=>TIPOS[t].conta==='afastamento').map(t=>`<option value="${t}" ${modal.tipo===t?'selected':''}>${t}</option>`).join('')}</select>
     </div>
     <div class="field"><label>Data inicial</label><input type="date" id="p_inicio" value="${todayISO()}"></div>
     <div class="field"><label>Preencher por</label>
