@@ -12,8 +12,84 @@
 const firebaseConfig={apiKey:"AIzaSyCdscx86MntuXmTzX87Tdwb3XbFbvTdj7w",authDomain:"controle-presenca-d55c4.firebaseapp.com",projectId:"controle-presenca-d55c4",storageBucket:"controle-presenca-d55c4.firebasestorage.app",messagingSenderId:"743343120094",appId:"1:743343120094:web:ea30489b70659d8546ac4f"};
 let db=null, auth=null;
 try{firebase.initializeApp(firebaseConfig);db=firebase.firestore();auth=firebase.auth();}catch(e){console.warn('Firebase não inicializado',e);}
-function mergeLocalColaboradores(){try{const saved=JSON.parse(localStorage.getItem('presenca_colaboradores')||'[]');if(saved.length){const ids=new Set(state.colaboradores.map(c=>c.id));saved.forEach(c=>{if(!ids.has(c.id))state.colaboradores.push(c);else Object.assign(state.colaboradores.find(x=>x.id===c.id),c);});state.nextColabId=Math.max(state.nextColabId,...state.colaboradores.map(c=>+c.id+1));}}catch(e){console.warn('Não foi possível ler os dados locais',e);}}
-function persistColaborador(c){try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){console.warn('Armazenamento local indisponível',e);}if(!db){return Promise.reject(new Error('Firebase não inicializado'));}return db.collection('colaboradores').doc(String(c.id)).set({...c,atualizadoEm:new Date().toISOString()},{merge:true}).then(()=>true).catch(e=>{console.warn('Firebase bloqueou a gravação. Verifique as regras do Firestore:',e.message);throw e;});}
+
+// ---- Camada de persistência ----
+// Antes, só "colaboradores" era salvo (e de forma incompleta: os 4 nomes de
+// demonstração eram recriados em código a cada carregamento e "reapareciam"
+// depois de excluídos). Usuários, marcações diárias, períodos e auditoria
+// nunca eram salvos em lugar nenhum, então tudo isso se perdia ao recarregar
+// a página ou sair e entrar de novo.
+//
+// Agora existe uma gravação central (persistAll) que salva TODO o estado
+// (colaboradores, usuários, registros diários, histórico de períodos e
+// auditoria) no localStorage do navegador e também em uma coleção
+// "appstate" no Firebase, e uma leitura central (loadSavedState) que
+// carrega esses dados ANTES de usar os valores de demonstração — os dados
+// de demonstração só entram em uso na primeiríssima vez que o sistema roda
+// (quando ainda não existe nada salvo em lugar nenhum).
+
+const LS_SEEDED = 'presenca_seeded';
+const LS_KEYS = {
+  colaboradores:'presenca_colaboradores',
+  usuarios:'presenca_usuarios',
+  registros:'presenca_registros',
+  historico:'presenca_historico',
+  auditoria:'presenca_auditoria',
+};
+
+function loadSavedState(){
+  // 1) localStorage: some antes de qualquer render, evita "piscar" dados de demo
+  try{
+    if(localStorage.getItem(LS_SEEDED)){
+      Object.entries(LS_KEYS).forEach(([campo,key])=>{
+        const raw = localStorage.getItem(key);
+        if(raw){
+          try{ state[campo] = JSON.parse(raw); }catch(e){ /* mantém o padrão se corrompido */ }
+        }
+      });
+      recalcContadores();
+    }
+  }catch(e){ console.warn('Não foi possível ler os dados salvos localmente',e); }
+}
+
+function recalcContadores(){
+  if(state.colaboradores.length) state.nextColabId = Math.max(state.nextColabId, ...state.colaboradores.map(c=>+c.id+1));
+  if(state.usuarios.length) state.nextUserId = Math.max(state.nextUserId, ...state.usuarios.map(u=>+u.id+1));
+  if(state.historico.length) state.nextHistId = Math.max(state.nextHistId, ...state.historico.map(h=>+h.id+1));
+}
+
+let persistTimer=null;
+function schedulePersistAll(){
+  clearTimeout(persistTimer);
+  persistTimer=setTimeout(persistAll,350);
+}
+function persistAll(){
+  try{
+    localStorage.setItem(LS_KEYS.colaboradores, JSON.stringify(state.colaboradores));
+    localStorage.setItem(LS_KEYS.usuarios, JSON.stringify(state.usuarios));
+    localStorage.setItem(LS_KEYS.registros, JSON.stringify(state.registros));
+    localStorage.setItem(LS_KEYS.historico, JSON.stringify(state.historico));
+    localStorage.setItem(LS_KEYS.auditoria, JSON.stringify(state.auditoria.slice(0,500)));
+    localStorage.setItem(LS_SEEDED,'1');
+  }catch(e){ console.warn('Armazenamento local indisponível',e); }
+  if(!db) return;
+  db.collection('appstate').doc('main').set({
+    usuarios: state.usuarios,
+    registros: state.registros,
+    historico: state.historico,
+    auditoria: state.auditoria.slice(0,500),
+    nextColabId: state.nextColabId,
+    nextUserId: state.nextUserId,
+    nextHistId: state.nextHistId,
+    atualizadoEm: new Date().toISOString()
+  },{merge:true}).catch(e=>console.warn('Firebase bloqueou a gravação do estado geral. Verifique as regras do Firestore:',e.message));
+}
+
+function persistColaborador(c){
+  try{ localStorage.setItem(LS_KEYS.colaboradores,JSON.stringify(state.colaboradores)); localStorage.setItem(LS_SEEDED,'1'); }catch(e){console.warn('Armazenamento local indisponível',e);}
+  if(!db){return Promise.reject(new Error('Firebase não inicializado'));}
+  return db.collection('colaboradores').doc(String(c.id)).set({...c,atualizadoEm:new Date().toISOString()},{merge:true}).then(()=>true).catch(e=>{console.warn('Firebase bloqueou a gravação. Verifique as regras do Firestore:',e.message);throw e;});
+}
 function persistTodosColaboradores(){state.colaboradores.forEach(persistColaborador);}
 </script>
 <style>
@@ -48,9 +124,11 @@ h1{font-size:clamp(1.55rem,2.5vw,2.05rem);letter-spacing:-.04em;margin:0 0 5px;c
 <div id="root"></div>
 
 <script>
-// ================== ESTADO EM MEMÓRIA ==================
-// Os dados existem apenas enquanto esta aba estiver aberta (sem localStorage).
-// Recarregar a página reinicia para o estado de demonstração.
+// ================== ESTADO ==================
+// Os objetos abaixo são apenas os dados de DEMONSTRAÇÃO usados na
+// primeiríssima execução do sistema (quando nada ainda foi salvo). A partir
+// da primeira gravação, loadSavedState()/Firebase passam a alimentar o
+// estado real, e essas listas de exemplo deixam de ser usadas.
 
 const TIPOS = {
   'Presença': {cor:'#1e4d8b', conta:'presenca'},
@@ -83,8 +161,49 @@ let state = {
   nextUserId: 2,
   nextHistId: 1,
 };
-mergeLocalColaboradores();
-if(db){db.collection('colaboradores').get().then(snap=>{snap.forEach(doc=>{const item=doc.data();const id=+doc.id;const atual=state.colaboradores.find(c=>c.id===id);if(atual)Object.assign(atual,item);else state.colaboradores.push({...item,id});});state.nextColabId=Math.max(state.nextColabId,...state.colaboradores.map(c=>+c.id+1));try{localStorage.setItem('presenca_colaboradores',JSON.stringify(state.colaboradores));}catch(e){} if(state.loggedUser)render();}).catch(e=>console.warn('Não foi possível carregar colaboradores do Firebase. Verifique as regras do Firestore:',e.message));}
+// Carrega primeiro o que já está salvo neste navegador, para não recair
+// nos dados de demonstração de propósito (isso é o que fazia colaboradores
+// e usuários excluídos "voltarem" depois de excluídos ou de recarregar).
+loadSavedState();
+
+if(db){
+  // Colaboradores: o Firebase é a fonte compartilhada entre dispositivos.
+  // Quando a consulta responde, ela passa a valer como verdade — inclusive
+  // para exclusões feitas em outro dispositivo/aba — em vez de apenas
+  // acrescentar itens novos e nunca remover os que já foram excluídos.
+  db.collection('colaboradores').get().then(snap=>{
+    if(!snap.empty){
+      const doFirebase = [];
+      snap.forEach(doc=>{ doFirebase.push({...doc.data(), id:+doc.id}); });
+      state.colaboradores = doFirebase;
+    }
+    recalcContadores();
+    try{ localStorage.setItem(LS_KEYS.colaboradores, JSON.stringify(state.colaboradores)); localStorage.setItem(LS_SEEDED,'1'); }catch(e){}
+    if(state.loggedUser) render();
+  }).catch(e=>console.warn('Não foi possível carregar colaboradores do Firebase. Verifique as regras do Firestore:',e.message));
+
+  // Usuários, marcações diárias, períodos e auditoria: um único documento
+  // "appstate/main" guarda tudo isso; também tratado como fonte de verdade
+  // assim que a leitura responde.
+  db.collection('appstate').doc('main').get().then(doc=>{
+    if(doc.exists){
+      const d = doc.data();
+      if(d.usuarios) state.usuarios = d.usuarios;
+      if(d.registros) state.registros = d.registros;
+      if(d.historico) state.historico = d.historico;
+      if(d.auditoria) state.auditoria = d.auditoria;
+      recalcContadores();
+      try{
+        localStorage.setItem(LS_KEYS.usuarios, JSON.stringify(state.usuarios));
+        localStorage.setItem(LS_KEYS.registros, JSON.stringify(state.registros));
+        localStorage.setItem(LS_KEYS.historico, JSON.stringify(state.historico));
+        localStorage.setItem(LS_KEYS.auditoria, JSON.stringify(state.auditoria));
+        localStorage.setItem(LS_SEEDED,'1');
+      }catch(e){}
+      if(state.loggedUser) render();
+    }
+  }).catch(e=>console.warn('Não foi possível carregar o estado geral do Firebase. Verifique as regras do Firestore:',e.message));
+}
 
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function fmtDate(d){ if(!d) return '—'; const [y,m,day]=d.split('-'); return `${day}/${m}/${y}`; }
@@ -201,6 +320,7 @@ function render(){
   document.getElementById('logout').onclick = ()=>{ state.loggedUser=null; render(); };
   bindTabEvents();
   if(modal) renderModal();
+  schedulePersistAll();
 }
 function navItem(tab,label){ return `<div class="nav-item ${currentTab===tab?'active':''}" data-tab="${tab}">${label}</div>`; }
 
@@ -447,6 +567,7 @@ function bindTabEvents(){
         const obsCell = document.getElementById('obs-quick-'+cid);
         if(statusCell) statusCell.innerHTML = tipoBadge(sel.value);
         if(obsCell) obsCell.innerHTML='—'; const horaCell=document.getElementById('hora-quick-'+cid); if(horaCell) horaCell.innerHTML='—';
+        schedulePersistAll();
       };
     });
   }
