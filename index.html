@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Presença — Controle de Equipe</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- Scripts do Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+
 <style>
 :root{
   --ink:#172235; --paper:#f4f7fb; --moss:#2563eb; --moss-dark:#102a56;
@@ -30,16 +35,35 @@ h1{font-size:clamp(1.55rem,2.5vw,2.05rem);letter-spacing:-.04em;margin:0 0 5px;c
 .page-hero{display:flex;justify-content:space-between;gap:20px;align-items:center;background:linear-gradient(135deg,#eff6ff,#fff);border:1px solid #dbeafe;border-radius:20px;padding:22px 24px;margin-bottom:20px;box-shadow:0 8px 22px rgba(37,99,235,.06)}.page-hero h1{margin:0}.hero-note{color:#49658c;font-size:.84rem;max-width:560px}.pulse{display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:50%;box-shadow:0 0 0 5px rgba(34,197,94,.15);margin-right:8px}.insight-grid{display:grid;grid-template-columns:1.3fr .7fr;gap:16px;margin-bottom:24px}.insight-card{background:#fff;border:1px solid var(--line);border-radius:17px;padding:18px;box-shadow:var(--shadow)}.progress{height:10px;background:#eaf0f7;border-radius:99px;overflow:hidden;margin:12px 0 7px}.progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#22c55e,#0f9d8a);transition:width .5s}.empty-state{text-align:center;padding:30px 18px!important;color:var(--muted)}
 @media(max-width:900px){.sidebar{width:205px}.main{padding:22px 20px 36px}.insight-grid{grid-template-columns:1fr}}
 @media(max-width:650px){.app{display:block}.sidebar{width:100%;padding:12px 10px;display:flex;align-items:center;gap:5px;overflow-x:auto;position:sticky;top:0}.brand{font-size:1rem;padding:5px 8px;margin:0 6px 0 0;white-space:nowrap}.brand:before{width:28px;height:28px;border-radius:9px}.nav-item{font-size:.75rem;padding:9px 10px;white-space:nowrap;margin:0}.nav-item:before{display:none}.main{padding:18px 13px 32px}.top-actions{justify-content:flex-end}.userbar{font-size:.75rem}.page-hero{display:block;padding:18px}.page-hero button{margin-top:14px}.cards{grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:14px}.stat .n{font-size:1.6rem}th,td{padding:11px 9px;white-space:nowrap}.table-scroll{margin-right:-3px}.toolbar{align-items:stretch}.toolbar .fgroup{flex:1;min-width:130px}.toolbar button{width:100%}.modal{padding:22px 18px}}
+.loading-screen {display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:var(--paper);color:var(--moss-dark);font-size:1.2rem;font-weight:700;}
+.loading-spinner {border:4px solid rgba(37,99,235,.2);border-top-color:#3b82f6;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin-bottom:15px;}
+@keyframes spin {to {transform: rotate(360deg);}}
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div class="loading-screen">
+    <div class="loading-spinner"></div>
+    Conectando ao banco de dados...
+  </div>
+</div>
 
 <script>
-// ================== ESTADO EM MEMÓRIA ==================
-// Os dados existem apenas enquanto esta aba estiver aberta (sem localStorage).
-// Recarregar a página reinicia para o estado de demonstração.
+// ================== CONFIGURAÇÃO DO FIREBASE ==================
+const firebaseConfig = {
+  apiKey: "AIzaSyCdscx86MntuXmTzX87Tdwb3XbFbvTdj7w",
+  authDomain: "controle-presenca-d55c4.firebaseapp.com",
+  projectId: "controle-presenca-d55c4",
+  storageBucket: "controle-presenca-d55c4.firebasestorage.app",
+  messagingSenderId: "743343120094",
+  appId: "1:743343120094:web:ea30489b70659d8546ac4f"
+};
 
+// Inicializa o Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ================== ESTADO E BANCO DE DADOS ==================
 const TIPOS = {
   'Presença': {cor:'#1e4d8b', conta:'presenca'},
   'Falta': {cor:'#c0392b', conta:'ausencia'},
@@ -51,30 +75,59 @@ const TIPOS = {
   'Suspensão': {cor:'#555555', conta:'afastamento'},
 };
 
+// Dados Padrão (Usado no primeiro acesso)
 let state = {
   usuarios: [
     {id:1, nome:'Administrador', email:'admin@empresa.com', senha:'admin123', nivel:'Administrador', ativo:true}
   ],
   loggedUser: null,
-  colaboradores: [
-    {id:1, nome:'João Silva', matricula:'0001', cpf:'111.111.111-11', cargo:'Analista', depto:'RH', admissao:'2023-02-01', status:'Ativo'},
-    {id:2, nome:'Maria Souza', matricula:'0002', cpf:'222.222.222-22', cargo:'Assistente', depto:'Financeiro', admissao:'2022-06-15', status:'Ativo'},
-    {id:3, nome:'Carlos Lima', matricula:'0003', cpf:'333.333.333-33', cargo:'Coordenador', depto:'Operações', admissao:'2021-01-10', status:'Ativo'},
-    {id:4, nome:'Ana Santos', matricula:'0004', cpf:'444.444.444-44', cargo:'Estagiária', depto:'Marketing', admissao:'2024-03-20', status:'Ativo'},
-  ],
-  registros: {}, // chave: colaboradorId|YYYY-MM-DD -> {tipo, obs}
-  historico: [], // {id, colaboradorId, tipo, inicio, fim, obs, dias}
+  colaboradores: [],
+  registros: {}, 
+  historico: [], 
   auditoria: [],
-  nextColabId: 5,
+  nextColabId: 1,
   nextUserId: 2,
   nextHistId: 1,
 };
+
+let isDataLoaded = false;
+
+// Conecta e carrega os dados da nuvem
+db.collection("sistema_presenca").doc("dados_gerais").get().then((doc) => {
+  if (doc.exists) {
+    // Se já existem dados, carrega pro sistema
+    const cloudData = doc.data();
+    state = {...state, ...cloudData};
+    // Mantém o usuário deslogado na atualização de página por segurança
+    state.loggedUser = null; 
+  } else {
+    // Primeiro acesso: Salva os dados padrão iniciais na nuvem
+    saveDataToFirebase();
+  }
+  isDataLoaded = true;
+  render();
+}).catch((error) => {
+  alert("Erro de conexão. Verifique sua internet ou a configuração do Firebase.");
+  isDataLoaded = true;
+  render();
+});
+
+// Função para gravar alterações na nuvem
+function saveDataToFirebase() {
+  if (isDataLoaded) {
+    // Clonamos o estado e removemos o usuário logado para não salvar a sessão permanentemente
+    const stateToSave = {...state};
+    delete stateToSave.loggedUser; 
+    db.collection("sistema_presenca").doc("dados_gerais").set(stateToSave);
+  }
+}
+
 
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function fmtDate(d){ if(!d) return '—'; const [y,m,day]=d.split('-'); return `${day}/${m}/${y}`; }
 function addDays(dateStr, n){ const d = new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function diffDays(a,b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
-function logAudit(msg){ state.auditoria.unshift({msg, ts:new Date().toLocaleString('pt-BR')}); }
+function logAudit(msg){ state.auditoria.unshift({msg, ts:new Date().toLocaleString('pt-BR')}); saveDataToFirebase(); }
 
 function applyPeriodo(colaboradorId, tipo, inicio, fim, obs){
   let cur = inicio;
@@ -96,11 +149,10 @@ function excluirRegistrosDoPeriodo(hist){
   }
 }
 
-// ================== NORMALIZAÇÃO DE TEXTO (p/ importação) ==================
+// ================== NORMALIZAÇÃO DE TEXTO ==================
 function normKey(s){
   return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 }
-// mapa de possíveis nomes de coluna (normalizados) -> campo interno
 const COLUMN_MAP = {
   'nome':'nome', 'nome completo':'nome', 'colaborador':'nome', 'funcionario':'nome',
   'matricula':'matricula', 'matricula ':'matricula', 'registro':'matricula',
@@ -115,16 +167,13 @@ const COLUMN_MAP = {
 function excelDateToISO(v){
   if(v===''||v==null) return '';
   if(typeof v === 'number'){
-    // número serial do Excel
     const d = XLSX.SSF.parse_date_code(v);
     if(!d) return '';
     return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
   }
   const s = v.toString().trim();
-  // dd/mm/aaaa
   let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
-  // já em aaaa-mm-dd
   m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
   return '';
@@ -140,16 +189,15 @@ let searchTerm = '';
 let relInicio = todayISO();
 let relFim = todayISO();
 let relColabId = 'todos';
-let importState = null; // {rows, headerRowIndex, mapping, problems, ready}
+let importState = null; 
 
 function removeModalNodes(){
-  // O modal é anexado diretamente ao <body> (fora da #root); se não for removido
-  // explicitamente antes de re-renderizar, ele se acumula no DOM a cada clique
-  // em "Cancelar"/"Salvar" e o Chrome passa a se confundir em páginas file://.
   document.querySelectorAll('.modal-bg').forEach(el=>el.remove());
 }
 
 function render(){
+  if(!isDataLoaded) return; // Aguarda o banco carregar
+
   removeModalNodes();
   if(!state.loggedUser){ renderLogin(); return; }
   root.innerHTML = `
@@ -163,7 +211,7 @@ function render(){
         ${navItem('importexport','Importar / Exportar')}
         ${navItem('usuarios','Usuários')}
         ${navItem('auditoria','Auditoria')}
-        <div style="margin:22px 12px 0;padding:13px 12px;border:1px solid rgba(147,197,253,.16);border-radius:13px;background:rgba(255,255,255,.06);font-size:.72rem;color:#bfdbfe;line-height:1.45"><span class="pulse"></span>Sistema operacional<br><b style="color:#fff">Monitoramento ativo</b></div>
+        <div style="margin:22px 12px 0;padding:13px 12px;border:1px solid rgba(147,197,253,.16);border-radius:13px;background:rgba(255,255,255,.06);font-size:.72rem;color:#bfdbfe;line-height:1.45"><span class="pulse"></span>Sistema em nuvem<br><b style="color:#fff">Conectado e salvo</b></div>
       </div>
       <div class="main" id="main"></div>
     </div>
@@ -300,15 +348,13 @@ function renderPresenca(){
   `;
 }
 
-// ---- Relatórios (com busca por período) ----
+// ---- Relatórios ----
 function renderRelatorios(){
   const inRange = state.historico.filter(h=>{
     if(relColabId!=='todos' && h.colaboradorId!==+relColabId) return false;
-    // interseção de período
     return h.inicio <= relFim && h.fim >= relInicio;
   });
 
-  // presenças diárias avulsas (marcadas manualmente) dentro do período
   const diarios = [];
   Object.keys(state.registros).forEach(key=>{
     const [cid, data] = key.split('|');
@@ -333,14 +379,14 @@ function renderRelatorios(){
       <button id="rel_buscar">Buscar</button>
     </div>
 
-    <h2 style="font-size:1.05rem;">Períodos lançados (férias, atestado, suspensão etc.)</h2>
+    <h2 style="font-size:1.05rem;">Períodos lançados</h2>
     <div class="table-scroll"><table>
       <tr><th>Colaborador</th><th>Tipo</th><th>Início</th><th>Fim</th><th>Dias</th><th>Obs.</th><th>Ações</th></tr>
       ${inRange.map(h=>{
         const c = state.colaboradores.find(x=>x.id===h.colaboradorId);
         return `<tr><td>${c?.nome||'(excluído)'}</td><td>${tipoBadge(h.tipo)}</td><td>${fmtDate(h.inicio)}</td><td>${fmtDate(h.fim)}</td><td>${h.dias}</td><td>${h.obs||'—'}</td>
           <td><button class="danger" data-delhist="${h.id}">Excluir</button></td></tr>`;
-      }).join('') || '<tr><td colspan="7">Nenhum período no intervalo selecionado.</td></tr>'}
+      }).join('') || '<tr><td colspan="7">Nenhum período no intervalo.</td></tr>'}
     </table></div>
 
     <h2 style="font-size:1.05rem;margin-top:22px;">Marcações diárias no período</h2>
@@ -350,7 +396,7 @@ function renderRelatorios(){
         const c = state.colaboradores.find(x=>x.id===d.colaboradorId);
         return `<tr><td>${c?.nome||'(excluído)'}</td><td>${fmtDate(d.data)}</td><td>${tipoBadge(d.tipo)}</td><td>${d.obs||'—'}</td>
           <td><button class="danger" data-delreg="${d.colaboradorId}|${d.data}">Excluir</button></td></tr>`;
-      }).join('') || '<tr><td colspan="5">Nenhuma marcação diária no intervalo selecionado.</td></tr>'}
+      }).join('') || '<tr><td colspan="5">Nenhuma marcação diária no intervalo.</td></tr>'}
     </table></div>
   `;
 }
@@ -361,7 +407,7 @@ function renderImportExport(){
     <h1>Importar / Exportar</h1>
     <div class="sub">Planilhas Excel (.xlsx / .xls)</div>
     <h2 style="font-size:1.05rem;">Importar colaboradores</h2>
-    <p class="hint">Aceita planilhas com cabeçalhos como: Nome, Matrícula, CPF, Cargo/Função, Departamento, Admissão, Status, Filial — mesmo com linhas de título antes da tabela (o sistema localiza a linha de cabeçalho automaticamente).</p>
+    <p class="hint">Aceita planilhas com cabeçalhos como: Nome, Matrícula, CPF, Cargo, etc.</p>
     <input type="file" id="fileImport" accept=".xlsx,.xls">
     <div id="importPreview"></div>
     <hr style="margin:26px 0;border:none;border-top:1px solid var(--line);">
@@ -369,7 +415,7 @@ function renderImportExport(){
     <div class="toolbar">
       <button id="exportColab">Exportar colaboradores</button>
       <button id="exportHist">Exportar histórico/ocorrências</button>
-      <button id="exportPresenca">Exportar presença (todas as datas lançadas)</button>
+      <button id="exportPresenca">Exportar presença</button>
     </div>
   `;
 }
@@ -424,6 +470,7 @@ function bindTabEvents(){
       const c = state.colaboradores.find(x=>x.id===+b.dataset.fire);
       c.status='Demitido';
       logAudit(`${state.loggedUser.nome} desligou ${c.nome}.`);
+      saveDataToFirebase();
       render();
     });
     document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
@@ -433,6 +480,7 @@ function bindTabEvents(){
       state.historico = state.historico.filter(h=>h.colaboradorId!==c.id);
       Object.keys(state.registros).forEach(k=>{ if(k.startsWith(c.id+'|')) delete state.registros[k]; });
       logAudit(`${state.loggedUser.nome} excluiu o colaborador ${c.nome}.`);
+      saveDataToFirebase();
       render();
     });
   }
@@ -446,8 +494,8 @@ function bindTabEvents(){
         state.registros[cid+'|'+filterDate] = {tipo: sel.value, obs:''};
         const c = state.colaboradores.find(x=>x.id===cid);
         logAudit(`${state.loggedUser.nome} marcou ${c.nome} como "${sel.value}" em ${fmtDate(filterDate)}.`);
-        // Atualiza só a linha afetada, sem recriar todos os <select> da tabela
-        // (recriar todos os selects em massa é o que provoca o travamento no Chrome local).
+        saveDataToFirebase();
+        
         const statusCell = document.getElementById('status-quick-'+cid);
         const obsCell = document.getElementById('obs-quick-'+cid);
         if(statusCell) statusCell.innerHTML = tipoBadge(sel.value);
@@ -469,7 +517,8 @@ function bindTabEvents(){
       if(!confirm('Excluir este período lançado? As marcações diárias correspondentes também serão removidas.')) return;
       excluirRegistrosDoPeriodo(h);
       state.historico = state.historico.filter(x=>x.id!==id);
-      logAudit(`${state.loggedUser.nome} excluiu o lançamento "${h.tipo}" (${fmtDate(h.inicio)}–${fmtDate(h.fim)}).`);
+      logAudit(`${state.loggedUser.nome} excluiu o lançamento "${h.tipo}".`);
+      saveDataToFirebase();
       render();
     });
     document.querySelectorAll('[data-delreg]').forEach(b=>b.onclick=()=>{
@@ -477,6 +526,7 @@ function bindTabEvents(){
       if(!confirm('Excluir esta marcação diária?')) return;
       delete state.registros[cid+'|'+data];
       logAudit(`${state.loggedUser.nome} excluiu a marcação de ${fmtDate(data)}.`);
+      saveDataToFirebase();
       render();
     });
   }
@@ -487,18 +537,20 @@ function bindTabEvents(){
     document.getElementById('exportPresenca').onclick = exportPresenca;
   }
   if(currentTab==='usuarios'){
-    document.getElementById('novoUsuario').onclick = ()=>{ modal={type:'usuario'}; render(); };
+    document.getElementById('novoUsuario').onclick = ()=>{ modal={type:'user'}; render(); };
     document.querySelectorAll('[data-toggleuser]').forEach(b=>b.onclick=()=>{
       const u = state.usuarios.find(x=>x.id===+b.dataset.toggleuser);
-      u.ativo=!u.ativo;
-      logAudit(`${state.loggedUser.nome} ${u.ativo?'ativou':'desativou'} usuário ${u.nome}.`);
+      u.ativo = !u.ativo;
+      logAudit(`${state.loggedUser.nome} ${u.ativo?'ativou':'desativou'} o usuário ${u.nome}.`);
+      saveDataToFirebase();
       render();
     });
     document.querySelectorAll('[data-deluser]').forEach(b=>b.onclick=()=>{
       const u = state.usuarios.find(x=>x.id===+b.dataset.deluser);
-      if(!confirm(`Excluir usuário ${u.nome}?`)) return;
+      if(!confirm(`Excluir o usuário ${u.nome}?`)) return;
       state.usuarios = state.usuarios.filter(x=>x.id!==u.id);
       logAudit(`${state.loggedUser.nome} excluiu o usuário ${u.nome}.`);
+      saveDataToFirebase();
       render();
     });
   }
@@ -506,366 +558,351 @@ function bindTabEvents(){
 
 // ================== MODAIS ==================
 function renderModal(){
-  let html='';
-  if(modal.type==='colab') html = colabModal();
-  if(modal.type==='hist') html = histModal();
-  if(modal.type==='periodo') html = periodoModal();
-  if(modal.type==='usuario') html = usuarioModal();
-  const wrap = document.createElement('div');
-  wrap.className='modal-bg';
-  wrap.innerHTML = `<div class="modal">${html}</div>`;
-  wrap.addEventListener('click', (e)=>{ if(e.target===wrap){ modal=null; render(); } });
-  document.body.appendChild(wrap);
-  bindModalEvents(wrap);
-}
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  const m = document.createElement('div');
+  m.className = 'modal';
+  bg.appendChild(m);
+  document.body.appendChild(bg);
 
-function colabModal(){
-  const c = modal.id ? state.colaboradores.find(x=>x.id===modal.id) : {};
-  return `
-    <h2>${modal.id?'Editar':'Novo'} colaborador</h2>
-    <div class="field"><label>Nome completo</label><input id="f_nome" value="${c.nome||''}"></div>
-    <div class="field"><label>Matrícula</label><input id="f_matricula" value="${c.matricula||''}"></div>
-    <div class="field"><label>CPF</label><input id="f_cpf" value="${c.cpf||''}"></div>
-    <div class="field"><label>Cargo</label><input id="f_cargo" value="${c.cargo||''}"></div>
-    <div class="field"><label>Departamento</label><input id="f_depto" value="${c.depto||''}"></div>
-    <div class="field"><label>Setor</label>
-      <select id="f_setor">
-        <option value="" ${!c.setor?'selected':''}>Selecione...</option>
-        <option value="Compra" ${c.setor==='Compra'?'selected':''}>Compra</option>
-        <option value="Guarda" ${c.setor==='Guarda'?'selected':''}>Guarda</option>
-      </select>
-    </div>
-    <div class="field"><label>Data de admissão</label><input type="date" id="f_admissao" value="${c.admissao||''}"></div>
-    <div class="modal-actions">
-      <button class="secondary" id="cancelModal">Cancelar</button>
-      <button id="saveColab">Salvar</button>
-    </div>
-  `;
-}
-function histModal(){
-  const c = state.colaboradores.find(x=>x.id===modal.id);
-  const hist = state.historico.filter(h=>h.colaboradorId===modal.id);
-  return `
-    <h2>Histórico — ${c.nome}</h2>
-    <div class="table-scroll"><table>
-      <tr><th>Tipo</th><th>Início</th><th>Fim</th><th>Dias</th><th>Obs.</th><th></th></tr>
-      ${hist.map(h=>`<tr><td>${tipoBadge(h.tipo)}</td><td>${fmtDate(h.inicio)}</td><td>${fmtDate(h.fim)}</td><td>${h.dias}</td><td>${h.obs||'—'}</td>
-        <td><button class="danger" data-delhistmodal="${h.id}">Excluir</button></td></tr>`).join('') || '<tr><td colspan="6">Sem ocorrências.</td></tr>'}
-    </table></div>
-    <div class="modal-actions"><button class="secondary" id="cancelModal">Fechar</button></div>
-  `;
-}
-function periodoModal(){
-  const ativos = state.colaboradores.filter(c=>c.status!=='Demitido');
-  return `
-    <h2>Lançar período</h2>
-    <div class="field"><label>Colaborador</label>
-      <select id="p_colab">${ativos.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('')}</select>
-    </div>
-    <div class="field"><label>Tipo de ocorrência</label>
-      <select id="p_tipo">${Object.keys(TIPOS).filter(t=>TIPOS[t].conta==='afastamento').map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
-    </div>
-    <div class="field"><label>Data inicial</label><input type="date" id="p_inicio" value="${todayISO()}"></div>
-    <div class="field"><label>Preencher por</label>
-      <select id="p_modo"><option value="dias">Quantidade de dias</option><option value="fim">Data final</option></select>
-    </div>
-    <div class="field" id="p_diasField"><label>Quantidade de dias</label><input type="number" id="p_dias" value="3" min="1"></div>
-    <div class="field" id="p_fimField" style="display:none"><label>Data final</label><input type="date" id="p_fim" value="${todayISO()}"></div>
-    <div class="field"><label>Observação</label><textarea id="p_obs" rows="2"></textarea></div>
-    <div class="modal-actions">
-      <button class="secondary" id="cancelModal">Cancelar</button>
-      <button id="savePeriodo">Lançar período</button>
-    </div>
-  `;
-}
-function usuarioModal(){
-  return `
-    <h2>Novo usuário</h2>
-    <div class="field"><label>Nome</label><input id="u_nome"></div>
-    <div class="field"><label>E-mail</label><input id="u_email"></div>
-    <div class="field"><label>Senha</label><input type="password" id="u_senha"></div>
-    <div class="field"><label>Nível de acesso</label>
-      <select id="u_nivel"><option>Administrador</option><option selected>Gestor/RH</option><option>Usuário</option></select>
-    </div>
-    <div class="modal-actions">
-      <button class="secondary" id="cancelModal">Cancelar</button>
-      <button id="saveUsuario">Criar usuário</button>
-    </div>
-  `;
-}
-
-function bindModalEvents(wrap){
-  wrap.querySelector('#cancelModal')?.addEventListener('click', ()=>{ modal=null; render(); });
-
-  wrap.querySelector('#saveColab')?.addEventListener('click', ()=>{
-    const nome = wrap.querySelector('#f_nome').value.trim();
-    if(!nome){ alert('Informe o nome.'); return; }
-    if(modal.id){
-      const c = state.colaboradores.find(x=>x.id===modal.id);
-      Object.assign(c, {
-        nome, matricula:wrap.querySelector('#f_matricula').value,
-        cpf:wrap.querySelector('#f_cpf').value, cargo:wrap.querySelector('#f_cargo').value,
-        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value,
-        admissao:wrap.querySelector('#f_admissao').value,
-      });
-      logAudit(`${state.loggedUser.nome} editou o cadastro de ${nome}.`);
-    } else {
-      const novo = {
-        id: state.nextColabId++, nome,
-        matricula:wrap.querySelector('#f_matricula').value || String(state.nextColabId).padStart(4,'0'),
-        cpf:wrap.querySelector('#f_cpf').value, cargo:wrap.querySelector('#f_cargo').value,
-        depto:wrap.querySelector('#f_depto').value, setor:wrap.querySelector('#f_setor').value,
-        admissao:wrap.querySelector('#f_admissao').value,
-        status:'Ativo'
+  if(modal.type==='colab'){
+    const c = modal.id ? state.colaboradores.find(x=>x.id===modal.id) : null;
+    m.innerHTML = `
+      <h2>${c?'Editar':'Novo'} Colaborador</h2>
+      <div class="field"><label>Nome *</label><input id="c_nome" value="${c?.nome||''}"></div>
+      <div class="field"><label>Matrícula</label><input id="c_mat" value="${c?.matricula||''}"></div>
+      <div class="field"><label>CPF</label><input id="c_cpf" value="${c?.cpf||''}"></div>
+      <div class="field"><label>Cargo</label><input id="c_cargo" value="${c?.cargo||''}"></div>
+      <div class="field"><label>Departamento</label><input id="c_depto" value="${c?.depto||''}"></div>
+      <div class="field"><label>Setor</label>
+        <select id="c_setor">
+          <option value="">(nenhum)</option>
+          <option value="Serviço" ${c?.setor==='Serviço'?'selected':''}>Serviço</option>
+          <option value="Compra" ${c?.setor==='Compra'?'selected':''}>Compra</option>
+        </select>
+      </div>
+      <div class="field"><label>Data de Admissão</label><input type="date" id="c_adm" value="${c?.admissao||''}"></div>
+      <div class="field"><label>Status</label>
+        <select id="c_status">
+          <option value="Ativo" ${c?.status==='Ativo'?'selected':''}>Ativo</option>
+          <option value="Férias" ${c?.status==='Férias'?'selected':''}>Férias</option>
+          <option value="Afastado" ${c?.status==='Afastado'?'selected':''}>Afastado</option>
+          <option value="Suspenso" ${c?.status==='Suspenso'?'selected':''}>Suspenso</option>
+          <option value="Demitido" ${c?.status==='Demitido'?'selected':''}>Demitido</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary" id="modCancel">Cancelar</button>
+        <button id="modSave">Salvar</button>
+      </div>
+    `;
+    document.getElementById('modCancel').onclick = ()=>{ modal=null; render(); };
+    document.getElementById('modSave').onclick = ()=>{
+      const nome = document.getElementById('c_nome').value.trim();
+      if(!nome) return alert('Nome é obrigatório.');
+      const data = {
+        nome,
+        matricula: document.getElementById('c_mat').value,
+        cpf: document.getElementById('c_cpf').value,
+        cargo: document.getElementById('c_cargo').value,
+        depto: document.getElementById('c_depto').value,
+        setor: document.getElementById('c_setor').value,
+        admissao: document.getElementById('c_adm').value,
+        status: document.getElementById('c_status').value
       };
-      state.colaboradores.push(novo);
-      logAudit(`${state.loggedUser.nome} cadastrou o colaborador ${nome}.`);
-    }
-    modal=null; render();
-  });
-
-  wrap.querySelectorAll('[data-delhistmodal]').forEach(b=>b.addEventListener('click', ()=>{
-    const id = +b.dataset.delhistmodal;
-    const h = state.historico.find(x=>x.id===id);
-    if(!h) return;
-    if(!confirm('Excluir este período? As marcações diárias correspondentes também serão removidas.')) return;
-    excluirRegistrosDoPeriodo(h);
-    state.historico = state.historico.filter(x=>x.id!==id);
-    logAudit(`${state.loggedUser.nome} excluiu o lançamento "${h.tipo}".`);
-    render();
-  }));
-
-  const modoSel = wrap.querySelector('#p_modo');
-  modoSel?.addEventListener('change', ()=>{
-    wrap.querySelector('#p_diasField').style.display = modoSel.value==='dias'?'block':'none';
-    wrap.querySelector('#p_fimField').style.display = modoSel.value==='fim'?'block':'none';
-  });
-
-  wrap.querySelector('#savePeriodo')?.addEventListener('click', ()=>{
-    const cid = +wrap.querySelector('#p_colab').value;
-    const tipo = wrap.querySelector('#p_tipo').value;
-    const inicio = wrap.querySelector('#p_inicio').value;
-    const obs = wrap.querySelector('#p_obs').value;
-    let fim;
-    if(modoSel.value==='dias'){
-      const dias = parseInt(wrap.querySelector('#p_dias').value,10) || 1;
-      fim = addDays(inicio, dias-1);
-    } else {
-      fim = wrap.querySelector('#p_fim').value;
-    }
-    if(!inicio || !fim){ alert('Informe as datas corretamente.'); return; }
-    if(fim < inicio){ alert('A data final não pode ser anterior à data inicial.'); return; }
-    applyPeriodo(cid, tipo, inicio, fim, obs);
-    const c = state.colaboradores.find(x=>x.id===cid);
-    if(TIPOS[tipo].conta==='afastamento') c.status = tipo==='Férias'?'Férias': tipo==='Suspensão'?'Suspenso':'Afastado';
-    modal=null; render();
-  });
-
-  wrap.querySelector('#saveUsuario')?.addEventListener('click', ()=>{
-    const nome = wrap.querySelector('#u_nome').value.trim();
-    const email = wrap.querySelector('#u_email').value.trim();
-    if(!nome || !email){ alert('Preencha nome e e-mail.'); return; }
-    if(state.usuarios.some(u=>u.email===email)){ alert('Já existe um usuário com este e-mail.'); return; }
-    state.usuarios.push({id:state.nextUserId++, nome, email, senha:wrap.querySelector('#u_senha').value||'123456', nivel:wrap.querySelector('#u_nivel').value, ativo:true});
-    logAudit(`${state.loggedUser.nome} criou o usuário ${nome} (${wrap.querySelector('#u_nivel').value}).`);
-    modal=null; render();
-  });
-}
-
-// ================== IMPORTAR / EXPORTAR EXCEL ==================
-function handleImportFile(e){
-  const file = e.target.files[0];
-  if(!file) return;
-  const preview = document.getElementById('importPreview');
-  preview.innerHTML = '<p class="hint">Lendo planilha...</p>';
-  const reader = new FileReader();
-  reader.onload = (evt)=>{
-    try{
-      const wb = XLSX.read(evt.target.result, {type:'binary', cellDates:false});
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      // pega a matriz bruta (sem assumir que a linha 1 é o cabeçalho)
-      const matrix = XLSX.utils.sheet_to_json(sheet, {header:1, defval:'', raw:true});
-
-      // localizar a linha de cabeçalho: primeira linha que tenha ao menos 2 colunas reconhecidas
-      let headerRowIdx = -1, mapping = {};
-      for(let i=0;i<Math.min(matrix.length,15);i++){
-        const row = matrix[i];
-        const map = {};
-        let hits = 0;
-        row.forEach((cell, colIdx)=>{
-          const key = COLUMN_MAP[normKey(cell)];
-          if(key){ map[key]=colIdx; hits++; }
-        });
-        if(hits>=2){ headerRowIdx=i; mapping=map; break; }
+      if(c){
+        Object.assign(c, data);
+        logAudit(`${state.loggedUser.nome} editou colaborador ${c.nome}.`);
+      } else {
+        const id = state.nextColabId++;
+        state.colaboradores.unshift({id, ...data});
+        logAudit(`${state.loggedUser.nome} cadastrou colaborador ${nome}.`);
       }
-
-      if(headerRowIdx===-1){
-        preview.innerHTML = `<div class="problem-box"><b>Não foi possível identificar o cabeçalho da planilha.</b><br>Verifique se existe uma linha com colunas como "Nome", "Matrícula", "Departamento" etc.</div>`;
-        return;
-      }
-      if(!('nome' in mapping)){
-        preview.innerHTML = `<div class="problem-box"><b>A planilha não tem uma coluna de nome reconhecida.</b><br>Renomeie a coluna para "Nome" e tente novamente.</div>`;
-        return;
-      }
-
-      const problemas = [];
-      let importados = 0;
-      for(let i=headerRowIdx+1; i<matrix.length; i++){
-        const row = matrix[i];
-        if(!row || row.every(c=>c===''||c==null)) continue; // linha totalmente vazia, ignora silenciosamente
-        const get = (field)=> mapping[field]!==undefined ? row[mapping[field]] : '';
-        const nome = (get('nome')||'').toString().trim();
-        if(!nome) continue; // linha sem nome (ex: linhas de rodapé) — ignorada sem contar como erro
-        const matriculaRaw = (get('matricula')||'').toString().trim();
-        const cpf = (get('cpf')||'').toString().trim();
-        if(matriculaRaw && state.colaboradores.some(c=>c.matricula===matriculaRaw)){
-          problemas.push(`Linha ${i+1}: matrícula "${matriculaRaw}" já cadastrada (${nome}).`); continue;
-        }
-        if(cpf && state.colaboradores.some(c=>c.cpf===cpf)){
-          problemas.push(`Linha ${i+1}: CPF "${cpf}" duplicado (${nome}).`); continue;
-        }
-        if(state.colaboradores.some(c=>normKey(c.nome)===normKey(nome) && !matriculaRaw)){
-          problemas.push(`Linha ${i+1}: colaborador "${nome}" já parece estar cadastrado.`); continue;
-        }
-        state.colaboradores.push({
-          id: state.nextColabId++,
-          nome,
-          matricula: matriculaRaw || String(state.nextColabId).padStart(4,'0'),
-          cpf,
-          cargo:(get('cargo')||'').toString(),
-          depto:(get('depto')||'').toString(),
-          admissao: excelDateToISO(get('admissao')),
-          status: (get('status')||'Ativo').toString() || 'Ativo'
-        });
-        importados++;
-      }
-
-      logAudit(`${state.loggedUser.nome} importou planilha: ${importados} colaborador(es) adicionados, ${problemas.length} problema(s).`);
-      preview.innerHTML = `
-        <div class="ok-box"><b>${importados} colaborador(es) importado(s) com sucesso.</b></div>
-        ${problemas.length? `<div class="problem-box"><b>${problemas.length} linha(s) ignorada(s):</b><br>${problemas.slice(0,50).join('<br>')}${problemas.length>50?'<br>...':''}</div>`:''}
-      `;
-      if(importados>0) render();
-    } catch(err){
-      preview.innerHTML = `<div class="problem-box"><b>Erro ao ler o arquivo.</b><br>${err.message}</div>`;
-    } finally {
-      e.target.value = '';
-    }
-  };
-  reader.onerror = ()=>{ preview.innerHTML = '<div class="problem-box">Não foi possível ler o arquivo.</div>'; };
-  reader.readAsBinaryString(file);
-}
-
-function downloadWorkbook(wb, filename){
-  try{
-    XLSX.writeFile(wb, filename);
-  }catch(err){
-    // fallback manual, útil em alguns navegadores/contextos de arquivo local
-    const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
-    const blob = new Blob([wbout], {type:'application/octet-stream'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+      saveDataToFirebase();
+      modal=null; render();
+    };
+  }
+  else if(modal.type==='hist'){
+    const c = state.colaboradores.find(x=>x.id===modal.id);
+    const h = state.historico.filter(x=>x.colaboradorId===c.id);
+    m.style.width = '700px';
+    m.innerHTML = `
+      <h2>Histórico: ${c.nome}</h2>
+      <div class="table-scroll"><table>
+        <tr><th>Tipo</th><th>Início</th><th>Fim</th><th>Dias</th><th>Obs.</th></tr>
+        ${h.map(x=>`<tr><td>${tipoBadge(x.tipo)}</td><td>${fmtDate(x.inicio)}</td><td>${fmtDate(x.fim)}</td><td>${x.dias}</td><td>${x.obs||'—'}</td></tr>`).join('') || '<tr><td colspan="5">Nenhum lançamento no histórico.</td></tr>'}
+      </table></div>
+      <div class="modal-actions"><button id="modCancel">Fechar</button></div>
+    `;
+    document.getElementById('modCancel').onclick = ()=>{ modal=null; render(); };
+  }
+  else if(modal.type==='periodo'){
+    const ativos = state.colaboradores.filter(c=>c.status!=='Demitido');
+    m.innerHTML = `
+      <h2>Lançar Período</h2>
+      <p class="sub">Lance férias, atestado, suspensão ou qualquer outro tipo para múltiplos dias de uma vez.</p>
+      <div class="field"><label>Colaborador *</label>
+        <select id="p_colab">
+          ${ativos.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Tipo *</label>
+        <select id="p_tipo">
+          ${Object.keys(TIPOS).map(t=>`<option value="${t}">${t}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:15px">
+        <div class="field" style="flex:1"><label>Início *</label><input type="date" id="p_ini" value="${todayISO()}"></div>
+        <div class="field" style="flex:1"><label>Fim *</label><input type="date" id="p_fim" value="${todayISO()}"></div>
+      </div>
+      <div class="field"><label>Observação / Justificativa</label><textarea id="p_obs" rows="3"></textarea></div>
+      <div class="modal-actions">
+        <button class="secondary" id="modCancel">Cancelar</button>
+        <button id="modSave">Lançar</button>
+      </div>
+    `;
+    document.getElementById('modCancel').onclick = ()=>{ modal=null; render(); };
+    document.getElementById('modSave').onclick = ()=>{
+      const cid = +document.getElementById('p_colab').value;
+      const tipo = document.getElementById('p_tipo').value;
+      const ini = document.getElementById('p_ini').value;
+      const fim = document.getElementById('p_fim').value;
+      const obs = document.getElementById('p_obs').value;
+      if(!ini || !fim) return alert('Selecione início e fim.');
+      if(ini > fim) return alert('Início maior que o fim.');
+      applyPeriodo(cid, tipo, ini, fim, obs);
+      saveDataToFirebase();
+      modal=null; render();
+    };
+  }
+  else if(modal.type==='user'){
+    m.innerHTML = `
+      <h2>Novo Usuário</h2>
+      <div class="field"><label>Nome *</label><input id="u_nome"></div>
+      <div class="field"><label>E-mail *</label><input id="u_email"></div>
+      <div class="field"><label>Senha *</label><input type="password" id="u_senha"></div>
+      <div class="field"><label>Nível</label>
+        <select id="u_nivel"><option value="Administrador">Administrador</option><option value="Operador">Operador (Restrito)</option></select>
+      </div>
+      <div class="modal-actions">
+        <button class="secondary" id="modCancel">Cancelar</button>
+        <button id="modSave">Salvar</button>
+      </div>
+    `;
+    document.getElementById('modCancel').onclick = ()=>{ modal=null; render(); };
+    document.getElementById('modSave').onclick = ()=>{
+      const nome = document.getElementById('u_nome').value.trim();
+      const email = document.getElementById('u_email').value.trim();
+      const senha = document.getElementById('u_senha').value;
+      if(!nome||!email||!senha) return alert('Preencha os campos obrigatórios.');
+      state.usuarios.push({id:state.nextUserId++, nome, email, senha, nivel:document.getElementById('u_nivel').value, ativo:true});
+      logAudit(`${state.loggedUser.nome} criou o usuário ${nome}.`);
+      saveDataToFirebase();
+      modal=null; render();
+    };
   }
 }
 
+// ================== IMPORTAR/EXPORTAR EXCEL ==================
+function handleImportFile(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const data = new Uint8Array(evt.target.result);
+    const workbook = XLSX.read(data, {type: 'array'});
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    let json = XLSX.utils.sheet_to_json(worksheet, {header:1, defval:''});
+    if(!json.length) return alert('A planilha está vazia.');
+
+    let headerRowIndex = -1;
+    let bestMapping = {};
+
+    for(let r=0; r<Math.min(json.length, 15); r++){
+      const row = json[r];
+      let mapping = {};
+      let hits = 0;
+      row.forEach((cell, c)=>{
+        const key = normKey(cell);
+        if(COLUMN_MAP[key]){
+          mapping[c] = COLUMN_MAP[key];
+          hits++;
+        }
+      });
+      if(hits >= 2 && hits > Object.keys(bestMapping).length) { 
+        headerRowIndex = r;
+        bestMapping = mapping;
+      }
+    }
+
+    if(headerRowIndex === -1){
+      return alert('Não consegui identificar os cabeçalhos. Certifique-se de que a planilha tem colunas como "Nome", "Matrícula", etc.');
+    }
+
+    let problems = [];
+    importState = {rows: json, headerRowIndex, mapping: bestMapping, problems, ready:[]};
+
+    for(let r=headerRowIndex+1; r<json.length; r++){
+      const row = json[r];
+      let isEmpty = true;
+      row.forEach(cell => { if(cell && cell.toString().trim() !== '') isEmpty = false; });
+      if(isEmpty) continue;
+
+      let colabData = {status: 'Ativo'};
+      Object.keys(bestMapping).forEach(colIdx => {
+        const fieldName = bestMapping[colIdx];
+        colabData[fieldName] = row[colIdx];
+      });
+
+      if(!colabData.nome || !colabData.nome.toString().trim()) {
+        problems.push(`Linha ${r+1}: Nome em branco. Ignorada.`);
+        continue;
+      }
+      colabData.nome = colabData.nome.toString().trim();
+      if(colabData.matricula) colabData.matricula = colabData.matricula.toString().trim();
+      if(colabData.admissao) colabData.admissao = excelDateToISO(colabData.admissao);
+
+      if(colabData.matricula && state.colaboradores.some(c=>c.matricula===colabData.matricula)) {
+        problems.push(`Linha ${r+1}: Matrícula ${colabData.matricula} já existe. Ignorada.`);
+        continue;
+      }
+
+      importState.ready.push(colabData);
+    }
+    renderImportPreview();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderImportPreview(){
+  const div = document.getElementById('importPreview');
+  if(!importState || !importState.ready) return;
+  div.innerHTML = `
+    <div class="ok-box"><b>${importState.ready.length} colaboradores</b> encontrados e prontos para importar.</div>
+    ${importState.problems.length > 0 ? `<div class="problem-box"><b>Avisos:</b><br>${importState.problems.slice(0,10).join('<br>')}${importState.problems.length>10?'<br>...':''}</div>` : ''}
+    <button style="margin-top:16px" id="doImportBtn">Confirmar Importação</button>
+  `;
+  document.getElementById('doImportBtn').onclick = ()=>{
+    importState.ready.forEach(d => {
+      state.colaboradores.unshift({id: state.nextColabId++, ...d});
+    });
+    logAudit(`${state.loggedUser.nome} importou ${importState.ready.length} colaboradores do Excel.`);
+    saveDataToFirebase();
+    alert('Importação concluída e salva no banco de dados!');
+    importState = null;
+    currentTab = 'colaboradores';
+    render();
+  };
+}
+
+// === EXPORTAÇÕES EXCEL ===
+function exportToExcel(dataArray, filename){
+  if(!dataArray || !dataArray.length) return alert('Não há dados para exportar.');
+  const worksheet = XLSX.utils.json_to_sheet(dataArray);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Planilha1");
+  XLSX.writeFile(workbook, filename);
+}
+
 function exportColaboradores(){
-  const data = state.colaboradores.map(c=>({
-    Nome:c.nome, Matricula:c.matricula, CPF:c.cpf, Cargo:c.cargo, Departamento:c.depto, Admissao:c.admissao, Status:c.status
+  const exportData = state.colaboradores.map(c=>({
+    'ID': c.id,
+    'Nome': c.nome,
+    'Matrícula': c.matricula||'',
+    'CPF': c.cpf||'',
+    'Cargo': c.cargo||'',
+    'Departamento': c.depto||'',
+    'Setor': c.setor||'',
+    'Admissão': fmtDate(c.admissao),
+    'Status': c.status
   }));
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Colaboradores');
-  downloadWorkbook(wb, 'colaboradores.xlsx');
-  logAudit(`${state.loggedUser.nome} exportou a lista de colaboradores.`);
+  exportToExcel(exportData, `Colaboradores_${todayISO()}.xlsx`);
 }
+
 function exportHistorico(){
-  const data = state.historico.map(h=>{
+  const exportData = state.historico.map(h=>{
     const c = state.colaboradores.find(x=>x.id===h.colaboradorId);
-    return {Colaborador:c?.nome||'', Tipo:h.tipo, Inicio:h.inicio, Fim:h.fim, Dias:h.dias, Observacao:h.obs};
+    return {
+      'Nome': c?.nome||'(excluído)',
+      'Tipo': h.tipo,
+      'Início': fmtDate(h.inicio),
+      'Fim': fmtDate(h.fim),
+      'Dias': h.dias,
+      'Observação': h.obs||''
+    };
   });
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Historico');
-  downloadWorkbook(wb, 'historico_ocorrencias.xlsx');
-  logAudit(`${state.loggedUser.nome} exportou o histórico de ocorrências.`);
+  exportToExcel(exportData, `Historico_Ocorrencias_${todayISO()}.xlsx`);
 }
+
 function exportPresenca(){
-  const data = [];
-  Object.keys(state.registros).forEach(key=>{
-    const [cid,data_] = key.split('|');
+  const exportData = [];
+  Object.keys(state.registros).forEach(k=>{
+    const [cid, data] = k.split('|');
     const c = state.colaboradores.find(x=>x.id===+cid);
-    const r = state.registros[key];
-    data.push({Colaborador:c?.nome||'', Data:data_, Situacao:r.tipo, Observacao:r.obs});
+    if(!c) return; 
+    exportData.push({
+      'Nome': c.nome,
+      'Matrícula': c.matricula||'',
+      'Data': fmtDate(data),
+      'Data_ISO': data, 
+      'Situação': state.registros[k].tipo,
+      'Observação': state.registros[k].obs||''
+    });
   });
-  data.sort((a,b)=>a.Data.localeCompare(b.Data));
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Presenca');
-  downloadWorkbook(wb, 'controle_presenca.xlsx');
-  logAudit(`${state.loggedUser.nome} exportou o controle de presença.`);
+  exportData.sort((a,b)=> a.Data_ISO.localeCompare(b.Data_ISO) || a.Nome.localeCompare(b.Nome));
+  exportData.forEach(d=> delete d.Data_ISO); 
+  exportToExcel(exportData, `Presencas_Diarias_${todayISO()}.xlsx`);
 }
 
 // ================== LOGIN ==================
 function renderLogin(){
-  removeModalNodes();
+  const msg = loginMode==='login'
+    ? '<b>Acesso ao sistema em nuvem</b><br>As credenciais iniciais são:<br>E-mail: <b>admin@empresa.com</b><br>Senha: <b>admin123</b>'
+    : '<b>Recuperação de senha</b><br>Acesse o painel do Firebase para redefinir credenciais.';
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-box">
-        <h1>Presença</h1>
-        <div class="sub">Controle de presença e ocorrências de funcionários</div>
+        <h1 style="color:#102a56;margin:0 0 10px;text-align:center">Presença<span style="color:#3b82f6">·RH</span></h1>
+        <div class="hint" style="text-align:center;margin-bottom:24px">${msg}</div>
         ${loginMode==='login' ? `
           <div class="field"><label>E-mail</label><input id="l_email" value="admin@empresa.com"></div>
           <div class="field"><label>Senha</label><input type="password" id="l_senha" value="admin123"></div>
-          <button id="doLogin">Entrar</button>
-          <div class="login-links">
-            <a id="toRegister">Cadastrar novo usuário</a>
-            <a id="forgot">Esqueci a senha</a>
-          </div>
-          <div class="hint">Acesso de demonstração já preenchido: admin@empresa.com / admin123.</div>
+          <button id="l_btn">Entrar no sistema</button>
+          <div class="login-links"><a id="l_esqueci">Esqueci a senha</a></div>
         ` : `
-          <div class="field"><label>Nome</label><input id="r_nome"></div>
-          <div class="field"><label>E-mail</label><input id="r_email"></div>
-          <div class="field"><label>Senha</label><input type="password" id="r_senha"></div>
-          <button id="doRegister">Cadastrar</button>
-          <div class="login-links"><a id="toLogin">Já tenho uma conta</a></div>
+          <div class="field"><label>E-mail cadastrado</label><input id="l_email"></div>
+          <button id="l_btn">Enviar instruções</button>
+          <div class="login-links"><a id="l_voltar">Voltar ao login</a></div>
         `}
       </div>
     </div>
   `;
   if(loginMode==='login'){
-    document.getElementById('doLogin').onclick = ()=>{
-      const email = document.getElementById('l_email').value.trim();
-      const senha = document.getElementById('l_senha').value;
-      const u = state.usuarios.find(x=>x.email===email && x.senha===senha);
-      if(!u){ alert('E-mail ou senha inválidos.'); return; }
-      if(!u.ativo){ alert('Este usuário está desativado.'); return; }
-      state.loggedUser = u;
-      logAudit(`${u.nome} entrou no sistema.`);
-      render();
+    document.getElementById('l_btn').onclick = ()=>{
+      const e = document.getElementById('l_email').value;
+      const s = document.getElementById('l_senha').value;
+      const u = state.usuarios.find(x=>x.email===e && x.senha===s);
+      if(u){
+        if(!u.ativo) return alert('Usuário desativado.');
+        state.loggedUser = u;
+        logAudit(`Login efetuado: ${u.nome}.`);
+        // Aqui nós intencionalmente não salvamos no Firebase para que 
+        // a sessão do usuário não fique presa no banco de dados na nuvem para outras pessoas.
+        render();
+      } else {
+        alert('Credenciais inválidas.');
+      }
     };
-    document.getElementById('toRegister').onclick = ()=>{ loginMode='register'; render(); };
-    document.getElementById('forgot').onclick = ()=>{ alert('Um link de recuperação seria enviado ao e-mail cadastrado (funcionalidade de demonstração).'); };
+    document.getElementById('l_esqueci').onclick = ()=>{ loginMode='esqueci'; render(); };
   } else {
-    document.getElementById('doRegister').onclick = ()=>{
-      const nome = document.getElementById('r_nome').value.trim();
-      const email = document.getElementById('r_email').value.trim();
-      const senha = document.getElementById('r_senha').value;
-      if(!nome||!email||!senha){ alert('Preencha todos os campos.'); return; }
-      if(state.usuarios.some(u=>u.email===email)){ alert('Já existe um usuário com este e-mail.'); return; }
-      const novo = {id:state.nextUserId++, nome, email, senha, nivel:'Usuário', ativo:true};
-      state.usuarios.push(novo);
-      state.loggedUser = novo;
-      logAudit(`${nome} se cadastrou no sistema.`);
-      render();
-    };
-    document.getElementById('toLogin').onclick = ()=>{ loginMode='login'; render(); };
+    document.getElementById('l_btn').onclick = ()=>alert('Procure a guia de Authentication dentro do site do Firebase para recuperar usuários.');
+    document.getElementById('l_voltar').onclick = ()=>{ loginMode='login'; render(); };
   }
 }
 
-render();
+// INICIA
+// O 'render()' agora é chamado automaticamente após o banco de dados conectar (ver no topo).
 </script>
 </body>
 </html>
