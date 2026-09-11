@@ -205,11 +205,26 @@ if(db){
   }).catch(e=>console.warn('Não foi possível carregar o estado geral do Firebase. Verifique as regras do Firestore:',e.message));
 }
 
-function todayISO(){return new Date().toISOString().slice(0,10);}
+function brasiliaParts(date=new Date()){
+  // Usa sempre o fuso de Brasília (America/Sao_Paulo), independente do fuso
+  // configurado no dispositivo. Antes, todayISO() usava toISOString(), que é
+  // sempre em UTC — como Brasília está 3h atrás do UTC, a partir de ~21h
+  // (horário de verão) / 21h (horário padrão) o sistema já considerava o dia
+  // seguinte, adiantando a virada da data incorretamente.
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone:'America/Sao_Paulo', year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  });
+  const parts = {};
+  fmt.formatToParts(date).forEach(p=>{ if(p.type!=='literal') parts[p.type]=p.value; });
+  return parts;
+}
+function todayISO(){ const p=brasiliaParts(); return `${p.year}-${p.month}-${p.day}`; }
+function nowBrasiliaFmt(){ const p=brasiliaParts(); return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}:${p.second}`; }
 function fmtDate(d){ if(!d) return '—'; const [y,m,day]=d.split('-'); return `${day}/${m}/${y}`; }
 function addDays(dateStr, n){ const d = new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 function diffDays(a,b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
-function logAudit(msg){ state.auditoria.unshift({msg, ts:new Date().toLocaleString('pt-BR')}); }
+function logAudit(msg){ state.auditoria.unshift({msg, ts:nowBrasiliaFmt()}); }
 
 function applyPeriodo(colaboradorId, tipo, inicio, fim, obs, hora=''){
   let cur = inicio;
@@ -278,6 +293,7 @@ let relFim = todayISO();
 let relColabId = 'todos';
 let importState = null; // {rows, headerRowIndex, mapping, problems, ready}
 let colabSetor='todos',colabStatus='todos',presencaBusca='',presencaSetor='todos',presencaStatus='todos',presencaSituacao='todos',relSetor='todos',relTipo='todos';
+let dashDate = todayISO();
 function byName(a,b){return normKey(a.nome||'').localeCompare(normKey(b.nome||''),'pt-BR',{sensitivity:'base'});}
 function setores(){return [...new Set(state.colaboradores.map(c=>c.setor).filter(Boolean))].sort((a,b)=>normKey(a).localeCompare(normKey(b),'pt-BR'));}
 function situacaoDo(c,d){return state.registros[c.id+'|'+d]?.tipo||'';}
@@ -338,10 +354,11 @@ function tabContent(){
 // ---- Dashboard ----
 function renderDashboard(){
   const ativos = state.colaboradores.filter(c=>c.status!=='Demitido');
-  const today = todayISO();
-  let presentes=0, faltas=0, ferias=0, atestado=0, suspensao=0, saidaAnt=0;
+  const hojeReal = todayISO();
+  const dia = dashDate || hojeReal;
+  let presentes=0, faltas=0, ferias=0, atestado=0, suspensao=0, saidaAnt=0, semLancamento=0;
   ativos.forEach(c=>{
-    const r = state.registros[c.id+'|'+today];
+    const r = state.registros[c.id+'|'+dia];
     if(r){
       if(r.tipo==='Presença') presentes++;
       else if(r.tipo==='Falta') faltas++;
@@ -349,24 +366,75 @@ function renderDashboard(){
       else if(r.tipo==='Atestado') atestado++;
       else if(r.tipo==='Suspensão') suspensao++;
       else if(r.tipo==='Saída antecipada') saidaAnt++;
+    } else {
+      semLancamento++;
     }
   });
   const abs=ativos.map(c=>({c,faltas:Object.keys(state.registros).filter(k=>k.startsWith(c.id+'|')&&state.registros[k].tipo==='Falta').length})).sort((a,b)=>b.faltas-a.faltas||byName(a.c,b.c));
   const maiorAbs=abs[0];
   const taxa = ativos.length ? Math.round((presentes / ativos.length) * 100) : 0;
+
+  // resumo por setor no dia selecionado
+  const porSetor = {};
+  ativos.forEach(c=>{
+    const s = c.setor || 'Sem setor';
+    if(!porSetor[s]) porSetor[s] = {total:0, presentes:0, faltas:0, afastados:0};
+    porSetor[s].total++;
+    const r = state.registros[c.id+'|'+dia];
+    if(r){
+      if(r.tipo==='Presença'||r.tipo==='Saída antecipada') porSetor[s].presentes++;
+      else if(r.tipo==='Falta') porSetor[s].faltas++;
+      else porSetor[s].afastados++;
+    }
+  });
+  const setoresList = Object.keys(porSetor).sort((a,b)=>normKey(a).localeCompare(normKey(b),'pt-BR'));
+
+  // resumo dos últimos 7 dias (terminando no dia selecionado)
+  const dias7 = [];
+  for(let i=6;i>=0;i--) dias7.push(addDays(dia,-i));
+  const resumo7 = dias7.map(d=>{
+    let p=0,f=0,af=0,sem=0;
+    ativos.forEach(c=>{
+      const r = state.registros[c.id+'|'+d];
+      if(!r){ sem++; return; }
+      if(r.tipo==='Presença'||r.tipo==='Saída antecipada') p++;
+      else if(r.tipo==='Falta') f++;
+      else af++;
+    });
+    return {data:d, presentes:p, faltas:f, afastados:af, semLancamento:sem};
+  });
+
   return `
-    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Painel atualizado para ${fmtDate(today)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
+    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Horário de Brasília agora: ${nowBrasiliaFmt()} · Hoje (Brasília): ${fmtDate(hojeReal)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
+    <div class="toolbar">
+      <div class="fgroup"><label>Ver resultados do dia</label><input type="date" id="dashDate" value="${dia}"></div>
+      <button class="secondary" id="dashHoje">Ver hoje</button>
+    </div>
     <div class="cards">
       ${stat(ativos.length,'Funcionários ativos')}
-      ${stat(presentes,'Presentes hoje')}
-      ${stat(faltas,'Faltas hoje')}
+      ${stat(presentes,`Presentes em ${fmtDate(dia)}`)}
+      ${stat(faltas,`Faltas em ${fmtDate(dia)}`)}
       ${stat(ferias,'De férias')}
       ${stat(atestado,'Com atestado')}
       ${stat(suspensao,'Suspensos')}
-      ${stat(saidaAnt,'Saída antecipada')}
+      ${stat(saidaAnt,`Saída antecipada em ${fmtDate(dia)}`)}
+      ${stat(semLancamento,`Sem lançamento em ${fmtDate(dia)}`)}
     </div>
-    <div class="insight-grid"><div class="insight-card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><b>Taxa de presença hoje</b><strong style="color:#0f9d8a;font-size:1.35rem">${taxa}%</strong></div><div class="progress"><i style="width:${taxa}%"></i></div><small style="color:var(--muted)">${presentes} de ${ativos.length} colaborador(es) ativo(s) com presença lançada.</small></div><div class="insight-card"><b>Maior absenteísmo</b><div style="font-size:1.1rem;font-weight:800;color:#b91c1c;margin-top:10px">${maiorAbs?.c.nome||'Nenhum registro'}</div><small style="color:var(--muted)">${maiorAbs?.faltas||0} falta(s) registrada(s) no histórico</small></div><div class="insight-card"><b>Atalhos rápidos</b><div class="btnrow" style="margin-top:14px"><button class="secondary" id="heroColab">+ Colaborador</button><button class="secondary" id="heroReport">Ver relatórios</button></div></div></div>
-    <h2 style="font-size:1.1rem;">Últimos lançamentos de período</h2>
+    <div class="insight-grid"><div class="insight-card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><b>Taxa de presença em ${fmtDate(dia)}</b><strong style="color:#0f9d8a;font-size:1.35rem">${taxa}%</strong></div><div class="progress"><i style="width:${taxa}%"></i></div><small style="color:var(--muted)">${presentes} de ${ativos.length} colaborador(es) ativo(s) com presença lançada.</small></div><div class="insight-card"><b>Maior absenteísmo (histórico)</b><div style="font-size:1.1rem;font-weight:800;color:#b91c1c;margin-top:10px">${maiorAbs?.c.nome||'Nenhum registro'}</div><small style="color:var(--muted)">${maiorAbs?.faltas||0} falta(s) registrada(s) no histórico</small></div><div class="insight-card"><b>Atalhos rápidos</b><div class="btnrow" style="margin-top:14px"><button class="secondary" id="heroColab">+ Colaborador</button><button class="secondary" id="heroReport">Ver relatórios</button></div></div></div>
+
+    <h2 style="font-size:1.1rem;">Resumo por setor em ${fmtDate(dia)}</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Setor</th><th>Ativos</th><th>Presentes</th><th>Faltas</th><th>Afastamentos</th><th>Taxa de presença</th></tr>
+      ${setoresList.map(s=>{const d=porSetor[s]; const t=d.total?Math.round((d.presentes/d.total)*100):0; return `<tr><td>${s}</td><td>${d.total}</td><td>${d.presentes}</td><td>${d.faltas}</td><td>${d.afastados}</td><td>${t}%</td></tr>`;}).join('') || '<tr><td colspan="6" class="empty-state">Nenhum setor cadastrado ainda.</td></tr>'}
+    </table></div>
+
+    <h2 style="font-size:1.1rem;margin-top:22px;">Últimos 7 dias (até ${fmtDate(dia)})</h2>
+    <div class="table-scroll"><table>
+      <tr><th>Data</th><th>Presentes</th><th>Faltas</th><th>Afastamentos</th><th>Sem lançamento</th></tr>
+      ${resumo7.map(r=>`<tr><td>${fmtDate(r.data)}${r.data===hojeReal?' <small style="color:var(--muted)">(hoje)</small>':''}</td><td>${r.presentes}</td><td>${r.faltas}</td><td>${r.afastados}</td><td>${r.semLancamento}</td></tr>`).join('')}
+    </table></div>
+
+    <h2 style="font-size:1.1rem;margin-top:22px;">Últimos lançamentos de período</h2>
     <div class="table-scroll"><table>
       <tr><th>Colaborador</th><th>Tipo</th><th>Início</th><th>Fim</th><th>Dias</th><th>Obs.</th></tr>
       ${state.historico.slice(0,8).map(h=>{
@@ -378,7 +446,7 @@ function renderDashboard(){
 }
 function stat(n,l){ return `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
 function tipoBadge(tipo){ const cor = TIPOS[tipo]?.cor || '#777'; return `<span class="badge" style="background:${cor}">${tipo}</span>`; }
-function saudacaoAtual(){const h=new Date().getHours();return h<12?'Bom dia':h<18?'Boa tarde':'Boa noite';}
+function saudacaoAtual(){const h=+brasiliaParts().hour;return h<12?'Bom dia':h<18?'Boa tarde':'Boa noite';}
 const MENSAGENS_DIA=[
   'Comece o dia com foco e faça acontecer.',
   'Grandes resultados são construídos com pequenas atitudes todos os dias.',
@@ -389,7 +457,7 @@ const MENSAGENS_DIA=[
   'Foco no que importa, atitude no que precisa ser feito.',
   'O esforço de hoje é o resultado que construiremos amanhã.'
 ];
-function mensagemDoDia(){const dia=Math.floor(Date.now()/86400000);return MENSAGENS_DIA[dia%MENSAGENS_DIA.length];}
+function mensagemDoDia(){const [y,m,d]=todayISO().split('-').map(Number);const dia=Math.floor(Date.UTC(y,m-1,d)/86400000);return MENSAGENS_DIA[dia%MENSAGENS_DIA.length];}
 function dadosRelatorioFiltrado(){
   const historico=state.historico.filter(h=>{const c=state.colaboradores.find(x=>x.id===h.colaboradorId);return (relColabId==='todos'||h.colaboradorId===+relColabId)&&(relSetor==='todos'||c?.setor===relSetor)&&(relTipo==='todos'||h.tipo===relTipo)&&h.inicio<=relFim&&h.fim>=relInicio;});
   const diarios=[];Object.keys(state.registros).forEach(key=>{const [cid,data]=key.split('|');const c=state.colaboradores.find(x=>x.id===+cid);if(data>=relInicio&&data<=relFim&&(relColabId==='todos'||+cid===+relColabId)&&(relSetor==='todos'||c?.setor===relSetor)&&(relTipo==='todos'||state.registros[key].tipo===relTipo))diarios.push({colaboradorId:+cid,data,...state.registros[key]});});
@@ -529,6 +597,8 @@ function bindTabEvents(){
     document.getElementById('heroPresence')?.addEventListener('click',()=>{ currentTab='presenca'; render(); });
     document.getElementById('heroColab')?.addEventListener('click',()=>{ currentTab='colaboradores'; modal={type:'colab'}; render(); });
     document.getElementById('heroReport')?.addEventListener('click',()=>{ currentTab='relatorios'; render(); });
+    document.getElementById('dashDate')?.addEventListener('change',e=>{ dashDate=e.target.value; render(); });
+    document.getElementById('dashHoje')?.addEventListener('click',()=>{ dashDate=todayISO(); render(); });
   }
   if(currentTab==='colaboradores'){
     document.getElementById('searchColab').oninput = e=>{ searchTerm=e.target.value; render(); const inp=document.getElementById('searchColab'); inp.focus(); inp.selectionStart=inp.selectionEnd=inp.value.length; };
