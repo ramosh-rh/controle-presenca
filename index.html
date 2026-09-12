@@ -219,7 +219,38 @@ function brasiliaParts(date=new Date()){
   fmt.formatToParts(date).forEach(p=>{ if(p.type!=='literal') parts[p.type]=p.value; });
   return parts;
 }
-function todayISO(){ const p=brasiliaParts(); return `${p.year}-${p.month}-${p.day}`; }
+let localizacaoAtual = null; // texto tipo "Pavuna, Rio de Janeiro - RJ"
+function carregarLocalizacao(){
+  try{
+    const cached = JSON.parse(localStorage.getItem('presenca_localizacao')||'null');
+    if(cached && cached.label && cached.ts && (Date.now()-cached.ts) < 12*60*60*1000){
+      localizacaoAtual = cached.label;
+      return;
+    }
+  }catch(e){}
+  if(!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const {latitude, longitude} = pos.coords;
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1`)
+      .then(r=>r.json())
+      .then(data=>{
+        const a = data.address || {};
+        const bairro = a.suburb || a.neighbourhood || a.quarter || a.village || '';
+        const cidade = a.city || a.town || a.municipality || '';
+        let uf = '';
+        if(a['ISO3166-2-lvl4']) uf = a['ISO3166-2-lvl4'].split('-')[1] || '';
+        let label = [bairro, cidade].filter(Boolean).join(', ');
+        if(uf) label += (label?' - ':'') + uf;
+        if(!label) label = a.state || '';
+        if(label){
+          localizacaoAtual = label;
+          try{ localStorage.setItem('presenca_localizacao', JSON.stringify({label, ts:Date.now()})); }catch(e){}
+          if(state.loggedUser) render();
+        }
+      }).catch(()=>{ /* geocodificação indisponível: mantém só o horário */ });
+  }, ()=>{ /* usuário negou a permissão de localização, ou está indisponível */ }, {enableHighAccuracy:false, timeout:8000, maximumAge:3600000});
+}
+carregarLocalizacao();
 function nowBrasiliaFmt(){ const p=brasiliaParts(); return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}:${p.second}`; }
 function fmtDate(d){ if(!d) return '—'; const [y,m,day]=d.split('-'); return `${day}/${m}/${y}`; }
 function addDays(dateStr, n){ const d = new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
@@ -405,7 +436,7 @@ function renderDashboard(){
   });
 
   return `
-    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Horário de Brasília agora: ${nowBrasiliaFmt()} · Hoje (Brasília): ${fmtDate(hojeReal)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
+    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Horário local agora: ${nowBrasiliaFmt()}${localizacaoAtual?` · ${localizacaoAtual}`:''} · Hoje: ${fmtDate(hojeReal)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
     <div class="toolbar">
       <div class="fgroup"><label>Ver resultados do dia</label><input type="date" id="dashDate" value="${dia}"></div>
       <button class="secondary" id="dashHoje">Ver hoje</button>
