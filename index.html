@@ -219,36 +219,22 @@ function brasiliaParts(date=new Date()){
   fmt.formatToParts(date).forEach(p=>{ if(p.type!=='literal') parts[p.type]=p.value; });
   return parts;
 }
-let localizacaoAtual = null; // texto tipo "Pavuna, Rio de Janeiro - RJ"
+function todayISO(){ const p=brasiliaParts(); return `${p.year}-${p.month}-${p.day}`; }
+
+// Local de trabalho: como geolocalização por GPS/navegador depende de
+// permissão e do dispositivo ter localização ativada (o que nem sempre é o
+// caso), aqui é simplesmente perguntado uma vez e guardado no navegador —
+// funciona em qualquer computador, mesmo sem localização habilitada.
+let localizacaoAtual = null;
 function carregarLocalizacao(){
+  try{ localizacaoAtual = localStorage.getItem('presenca_local_texto') || null; }catch(e){}
+}
+function definirLocalizacao(texto){
+  localizacaoAtual = (texto||'').trim() || null;
   try{
-    const cached = JSON.parse(localStorage.getItem('presenca_localizacao')||'null');
-    if(cached && cached.label && cached.ts && (Date.now()-cached.ts) < 12*60*60*1000){
-      localizacaoAtual = cached.label;
-      return;
-    }
+    if(localizacaoAtual) localStorage.setItem('presenca_local_texto', localizacaoAtual);
+    else localStorage.removeItem('presenca_local_texto');
   }catch(e){}
-  if(!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(pos=>{
-    const {latitude, longitude} = pos.coords;
-    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1`)
-      .then(r=>r.json())
-      .then(data=>{
-        const a = data.address || {};
-        const bairro = a.suburb || a.neighbourhood || a.quarter || a.village || '';
-        const cidade = a.city || a.town || a.municipality || '';
-        let uf = '';
-        if(a['ISO3166-2-lvl4']) uf = a['ISO3166-2-lvl4'].split('-')[1] || '';
-        let label = [bairro, cidade].filter(Boolean).join(', ');
-        if(uf) label += (label?' - ':'') + uf;
-        if(!label) label = a.state || '';
-        if(label){
-          localizacaoAtual = label;
-          try{ localStorage.setItem('presenca_localizacao', JSON.stringify({label, ts:Date.now()})); }catch(e){}
-          if(state.loggedUser) render();
-        }
-      }).catch(()=>{ /* geocodificação indisponível: mantém só o horário */ });
-  }, ()=>{ /* usuário negou a permissão de localização, ou está indisponível */ }, {enableHighAccuracy:false, timeout:8000, maximumAge:3600000});
 }
 carregarLocalizacao();
 function nowBrasiliaFmt(){ const p=brasiliaParts(); return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}:${p.second}`; }
@@ -436,7 +422,7 @@ function renderDashboard(){
   });
 
   return `
-    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Horário local agora: ${nowBrasiliaFmt()}${localizacaoAtual?` · ${localizacaoAtual}`:''} · Hoje: ${fmtDate(hojeReal)}.</small></div></div><button id="heroPresence">Abrir controle diário</button></div>
+    <div class="page-hero"><div><h1>${saudacaoAtual()}, ${state.loggedUser?.nome?.split(' ')[0] || 'equipe'}!</h1><div class="hero-note"><span class="pulse"></span>${mensagemDoDia()}<br><small>Horário local agora: ${nowBrasiliaFmt()}${localizacaoAtual?` · ${localizacaoAtual}`:''} · Hoje: ${fmtDate(hojeReal)} · <a id="editarLocal" style="cursor:pointer;color:var(--moss);font-weight:700">${localizacaoAtual?'alterar local':'definir local'}</a></small></div></div><button id="heroPresence">Abrir controle diário</button></div>
     <div class="toolbar">
       <div class="fgroup"><label>Ver resultados do dia</label><input type="date" id="dashDate" value="${dia}"></div>
       <button class="secondary" id="dashHoje">Ver hoje</button>
@@ -630,6 +616,13 @@ function bindTabEvents(){
     document.getElementById('heroReport')?.addEventListener('click',()=>{ currentTab='relatorios'; render(); });
     document.getElementById('dashDate')?.addEventListener('change',e=>{ dashDate=e.target.value; render(); });
     document.getElementById('dashHoje')?.addEventListener('click',()=>{ dashDate=todayISO(); render(); });
+    document.getElementById('editarLocal')?.addEventListener('click',()=>{
+      const atual = localizacaoAtual || '';
+      const novo = prompt('Nome do local (ex.: Vila Maria Helena, Duque de Caxias - RJ):', atual);
+      if(novo===null) return;
+      definirLocalizacao(novo);
+      render();
+    });
   }
   if(currentTab==='colaboradores'){
     document.getElementById('searchColab').oninput = e=>{ searchTerm=e.target.value; render(); const inp=document.getElementById('searchColab'); inp.focus(); inp.selectionStart=inp.selectionEnd=inp.value.length; };
